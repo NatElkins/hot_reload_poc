@@ -13,34 +13,49 @@ open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open Prelude
 
-/// In-memory filesystem implementation to capture compilation output
+/// <summary>
+/// In-memory filesystem implementation to capture compilation output.
 /// This is used to intercept the compiler's output and store it in memory
-/// rather than writing to disk, which is more efficient for hot reload
+/// rather than writing to disk, which is more efficient for hot reload.
+/// </summary>
 type InMemoryFileSystem() =
     inherit DefaultFileSystem()
     member val InMemoryStream = new MemoryStream()
     override this.OpenFileForWriteShim(_, _, _, _) = this.InMemoryStream
 
+/// <summary>
 /// Represents the three types of deltas needed for hot reload:
 /// 1. MetadataDelta: Changes to type definitions and metadata tables
 /// 2. ILDelta: Changes to method bodies and IL instructions
 /// 3. PdbDelta: Changes to debug information and sequence points
+/// </summary>
 type Delta = {
+    /// <summary>Binary changes to assembly metadata tables and type definitions.</summary>
     MetadataDelta: byte[]
+    /// <summary>Binary changes to method bodies and IL instructions.</summary>
     ILDelta: byte[]
+    /// <summary>Binary changes to debug information and sequence points.</summary>
     PdbDelta: byte[]
 }
 
-/// Main generator for creating hot reload deltas
-/// Tracks the compiler state and previous compilation results
+/// <summary>
+/// Main generator for creating hot reload deltas.
+/// Tracks the compiler state and previous compilation results.
+/// </summary>
 type DeltaGenerator = {
+    /// <summary>The F# compiler instance used for compilation.</summary>
     Compiler: FSharpChecker
+    /// <summary>Results from the previous compilation, if any.</summary>
     PreviousCompilation: FSharpCheckFileResults option
+    /// <summary>Path to the previous assembly, if any.</summary>
     PreviousAssemblyPath: string option
 }
 
 module DeltaGenerator =
-    /// Creates a new DeltaGenerator with a fresh F# compiler instance
+    /// <summary>
+    /// Creates a new DeltaGenerator with a fresh F# compiler instance.
+    /// </summary>
+    /// <returns>A new DeltaGenerator instance with default settings.</returns>
     let create () =
         {
             Compiler = FSharpChecker.Create()
@@ -48,8 +63,17 @@ module DeltaGenerator =
             PreviousAssemblyPath = None
         }
 
-    /// Compiles a single file and returns the type checking results
-    /// This is the first step in the hot reload process - getting the new compilation
+    /// <summary>
+    /// Compiles a single file and returns the type checking results.
+    /// This is the first step in the hot reload process - getting the new compilation.
+    /// </summary>
+    /// <param name="generator">The DeltaGenerator instance to use for compilation.</param>
+    /// <param name="filePath">The path to the source file to compile.</param>
+    /// <returns>
+    /// An async computation that returns Some FSharpCheckFileResults if compilation succeeds,
+    /// or None if compilation fails.
+    /// </returns>
+    /// <exception cref="System.IO.IOException">Thrown when the file cannot be read.</exception>
     let compileFile (generator: DeltaGenerator) (filePath: string) =
         async {
             // Read and parse the source file
@@ -68,16 +92,26 @@ module DeltaGenerator =
                 return None
         }
 
-    /// Parses a PE (Portable Executable) file into a PEReader and MetadataReader
-    /// This is used to analyze both the previous and new versions of the assembly
+    /// <summary>
+    /// Parses a PE (Portable Executable) file into a PEReader and MetadataReader.
+    /// This is used to analyze both the previous and new versions of the assembly.
+    /// </summary>
+    /// <param name="bytes">The binary content of the PE file to parse.</param>
+    /// <returns>A tuple containing the PEReader and MetadataReader for the PE file.</returns>
+    /// <exception cref="System.BadImageFormatException">Thrown when the bytes do not represent a valid PE file.</exception>
     let private parsePE (bytes: byte[]) =
         use stream = new MemoryStream(bytes)
         let reader = new PEReader(stream)
         let metadataReader = reader.GetMetadataReader()
         (reader, metadataReader)
 
-    /// Generates the metadata delta by comparing metadata tables between old and new versions
-    /// This includes changes to type definitions, method signatures, and other metadata
+    /// <summary>
+    /// Generates the metadata delta by comparing metadata tables between old and new versions.
+    /// This includes changes to type definitions, method signatures, and other metadata.
+    /// </summary>
+    /// <param name="prevReader">The PEReader for the previous version of the assembly.</param>
+    /// <param name="newReader">The PEReader for the new version of the assembly.</param>
+    /// <returns>A byte array containing the metadata delta.</returns>
     let private generateMetadataDelta (prevReader: PEReader) (newReader: PEReader) =
         let prevMetadata = prevReader.GetMetadataReader()
         let newMetadata = newReader.GetMetadataReader()
@@ -110,8 +144,13 @@ module DeltaGenerator =
         
         changes.ToArray()
 
-    /// Generates the IL delta by comparing method bodies between old and new versions
-    /// This includes changes to method implementations and IL instructions
+    /// <summary>
+    /// Generates the IL delta by comparing method bodies between old and new versions.
+    /// This includes changes to method implementations and IL instructions.
+    /// </summary>
+    /// <param name="prevReader">The PEReader for the previous version of the assembly.</param>
+    /// <param name="newReader">The PEReader for the new version of the assembly.</param>
+    /// <returns>A byte array containing the IL delta.</returns>
     let private generateILDelta (prevReader: PEReader) (newReader: PEReader) =
         let prevMetadata = prevReader.GetMetadataReader()
         let newMetadata = newReader.GetMetadataReader()
@@ -141,8 +180,13 @@ module DeltaGenerator =
         
         changes.ToArray()
 
-    /// Generates the PDB delta by comparing debug information between old and new versions
-    /// This includes changes to sequence points, local variables, and other debug info
+    /// <summary>
+    /// Generates the PDB delta by comparing debug information between old and new versions.
+    /// This includes changes to sequence points, local variables, and other debug info.
+    /// </summary>
+    /// <param name="prevReader">The PEReader for the previous version of the assembly.</param>
+    /// <param name="newReader">The PEReader for the new version of the assembly.</param>
+    /// <returns>A byte array containing the PDB delta.</returns>
     let private generatePdbDelta (prevReader: PEReader) (newReader: PEReader) =
         let prevMetadata = prevReader.GetMetadataReader()
         let newMetadata = newReader.GetMetadataReader()
@@ -175,11 +219,21 @@ module DeltaGenerator =
         
         changes.ToArray()
 
-    /// Main entry point for generating deltas
+    /// <summary>
+    /// Main entry point for generating deltas.
     /// This orchestrates the entire hot reload process:
     /// 1. Compiles the changed file
     /// 2. Compares with previous compilation
     /// 3. Generates all three types of deltas
+    /// </summary>
+    /// <param name="generator">The DeltaGenerator instance to use for compilation.</param>
+    /// <param name="filePath">The path to the source file that has changed.</param>
+    /// <returns>
+    /// An async computation that returns Some Delta if deltas were successfully generated,
+    /// or None if generation failed or this is the first compilation.
+    /// </returns>
+    /// <exception cref="System.IO.IOException">Thrown when the file cannot be read.</exception>
+    /// <exception cref="System.BadImageFormatException">Thrown when the compiled assembly is invalid.</exception>
     let generateDelta (generator: DeltaGenerator) (filePath: string) =
         async {
             // Step 1: Compile the changed file

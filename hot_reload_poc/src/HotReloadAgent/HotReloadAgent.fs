@@ -13,29 +13,40 @@ type HotReloadAgent = {
 
 module HotReloadAgent =
     let create (targetAssembly: Assembly) (watchPath: string) (fileFilter: string) =
+        printfn "[HotReloadAgent] Creating agent for assembly: %s" targetAssembly.FullName
+        printfn "[HotReloadAgent] Watching path: %s with filter: %s" watchPath fileFilter
+        
         let deltaGenerator = DeltaGenerator.create()
         
         let handleFileChange (event: FileChangeEvent) =
             async {
+                printfn "[HotReloadAgent] File change detected: %s" event.FilePath
                 match! DeltaGenerator.generateDelta deltaGenerator event.FilePath with
                 | Some delta ->
                     try
+                        printfn "[HotReloadAgent] Converting delta to format expected by MetadataUpdater"
+                        // Convert our simplified delta to the format expected by MetadataUpdater
+                        let ilDelta = ReadOnlySpan(delta.ILBytes)
+                        let emptySpan = ReadOnlySpan(Array.empty<byte>)
+                        
+                        printfn "[HotReloadAgent] Applying update to assembly..."
                         // Apply the delta to the running assembly
                         MetadataUpdater.ApplyUpdate(
                             targetAssembly,
-                            ReadOnlySpan(delta.MetadataDelta),
-                            ReadOnlySpan(delta.ILDelta),
-                            ReadOnlySpan(delta.PdbDelta)
+                            emptySpan, // No metadata changes
+                            ilDelta,
+                            emptySpan  // No PDB changes
                         )
-                        printfn $"Successfully applied changes to {event.FilePath}"
+                        printfn "[HotReloadAgent] Successfully applied changes to %s" event.FilePath
                     with ex ->
-                        printfn $"Failed to apply changes: {ex.Message}"
+                        printfn "[HotReloadAgent] Failed to apply changes: %s" ex.Message
                 | None ->
-                    printfn "No delta generated for changes"
+                    printfn "[HotReloadAgent] No delta generated for changes"
             }
             |> Async.Start
 
         let fileWatcher = FileWatcher.create watchPath fileFilter handleFileChange
+        printfn "[HotReloadAgent] File watcher created successfully"
 
         {
             FileWatcher = fileWatcher
@@ -44,4 +55,6 @@ module HotReloadAgent =
         }
 
     let dispose (agent: HotReloadAgent) =
-        FileWatcher.dispose agent.FileWatcher 
+        printfn "[HotReloadAgent] Disposing agent..."
+        FileWatcher.dispose agent.FileWatcher
+        printfn "[HotReloadAgent] Agent disposed successfully" 

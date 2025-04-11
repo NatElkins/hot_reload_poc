@@ -5,10 +5,18 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <Optimize>false</Optimize>
+    <EmitDebugInformation>true</EmitDebugInformation>
+    <DeterministicSourcePaths>false</DeterministicSourcePaths>
+    <DeltaScript>deltascript.json</DeltaScript>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="SimpleTest.fs" />
+    <Compile Include="DeltaVerification.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

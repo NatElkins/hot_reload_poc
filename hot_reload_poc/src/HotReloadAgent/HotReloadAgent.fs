@@ -4,38 +4,37 @@ open System
 open System.Reflection
 open System.Runtime.CompilerServices
 open System.Reflection.Metadata
+open System.Collections.Immutable
 
 type HotReloadAgent = {
     FileWatcher: FileWatcher
     DeltaGenerator: DeltaGenerator
     TargetAssembly: Assembly
+    TypeName: string
+    MethodName: string
 }
 
 module HotReloadAgent =
-    let create (targetAssembly: Assembly) (watchPath: string) (fileFilter: string) =
+    let create (targetAssembly: Assembly) (watchPath: string) (fileFilter: string) (typeName: string) (methodName: string) =
         printfn "[HotReloadAgent] Creating agent for assembly: %s" targetAssembly.FullName
         printfn "[HotReloadAgent] Watching path: %s with filter: %s" watchPath fileFilter
+        printfn "[HotReloadAgent] Will update method: %s in type: %s" methodName typeName
         
         let deltaGenerator = DeltaGenerator.create()
         
         let handleFileChange (event: FileChangeEvent) =
             async {
                 printfn "[HotReloadAgent] File change detected: %s" event.FilePath
-                match! DeltaGenerator.generateDelta deltaGenerator event.FilePath with
+                match! DeltaGenerator.generateDelta deltaGenerator targetAssembly event.FilePath typeName methodName with
                 | Some delta ->
                     try
-                        printfn "[HotReloadAgent] Converting delta to format expected by MetadataUpdater"
-                        // Convert our simplified delta to the format expected by MetadataUpdater
-                        let ilDelta = ReadOnlySpan(delta.ILBytes)
-                        let emptySpan = ReadOnlySpan(Array.empty<byte>)
-                        
                         printfn "[HotReloadAgent] Applying update to assembly..."
                         // Apply the delta to the running assembly
                         MetadataUpdater.ApplyUpdate(
                             targetAssembly,
-                            emptySpan, // No metadata changes
-                            ilDelta,
-                            emptySpan  // No PDB changes
+                            delta.MetadataDelta.AsSpan(),
+                            delta.ILDelta.AsSpan(),
+                            delta.PdbDelta.AsSpan()
                         )
                         printfn "[HotReloadAgent] Successfully applied changes to %s" event.FilePath
                     with ex ->
@@ -52,6 +51,8 @@ module HotReloadAgent =
             FileWatcher = fileWatcher
             DeltaGenerator = deltaGenerator
             TargetAssembly = targetAssembly
+            TypeName = typeName
+            MethodName = methodName
         }
 
     let dispose (agent: HotReloadAgent) =

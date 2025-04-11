@@ -4,4 +4,4 @@ module SimpleTest
 /// Returns a constant value that we'll change during hot reload.
 /// </summary>
 /// <returns>The value 42.</returns>
-let getValue() = 43
+let getValue() = 42

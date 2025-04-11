@@ -1,6 +1,7 @@
 namespace HotReloadAgent
 
 open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.Text
 open System
 open System.IO
 
@@ -12,7 +13,7 @@ type Delta = {
 
 type DeltaGenerator = {
     Compiler: FSharpChecker
-    PreviousCompilation: FSharpCompilation option
+    PreviousCompilation: FSharpCheckFileResults option
 }
 
 module DeltaGenerator =
@@ -24,13 +25,12 @@ module DeltaGenerator =
 
     let compileFile (generator: DeltaGenerator) (filePath: string) =
         async {
-            let! projectOptions = generator.Compiler.GetProjectOptionsFromScript(filePath, File.ReadAllText(filePath))
-            let! parseResults, checkResults = generator.Compiler.ParseAndCheckFileInProject(filePath, 0, File.ReadAllText(filePath), projectOptions)
+            let sourceText = SourceText.ofString (File.ReadAllText(filePath))
+            let! projectOptions, _ = generator.Compiler.GetProjectOptionsFromScript(filePath, sourceText)
+            let! parseResults, checkResults = generator.Compiler.ParseAndCheckFileInProject(filePath, 0, sourceText, projectOptions)
             
             match checkResults with
             | FSharpCheckFileAnswer.Succeeded results ->
-                // TODO: Implement delta generation
-                // For now, just return the compilation
                 return Some results
             | FSharpCheckFileAnswer.Aborted ->
                 return None

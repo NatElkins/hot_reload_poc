@@ -3,6 +3,7 @@ namespace HotReloadAgent
 open System
 open System.Reflection
 open System.Runtime.CompilerServices
+open System.Reflection.Metadata
 
 type HotReloadAgent = {
     FileWatcher: FileWatcher

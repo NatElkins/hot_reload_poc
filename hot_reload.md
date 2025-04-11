@@ -454,4 +454,165 @@ To use `MetadataUpdater.ApplyUpdate` from F#, you need to:
      - PDB delta (changes to debug information)
    - Calling `ApplyUpdate` with these deltas to apply the changes to the running assembly
 
-This is the core mechanism that allows hot reload to work in non-debug mode, as it enables updating the running assembly's metadata and IL without requiring a restart. 
+This is the core mechanism that allows hot reload to work in non-debug mode, as it enables updating the running assembly's metadata and IL without requiring a restart.
+
+### Delta Format and Generation Process
+
+#### Binary Payload Format
+
+The hot reload system uses a specific binary payload format for communicating deltas between the watcher and the application. The format is as follows:
+
+```
+[Version: byte | Currently 0]
+[Absolute path of file changed: string]
+[Number of deltas produced: int32]
+[Delta item 1]
+[Delta item 2]
+...
+[Delta item n]
+```
+
+Where each delta item has the following structure:
+```
+[ModuleId: string]
+[MetadataDelta byte count: int32]
+[MetadataDelta bytes]
+[ILDelta byte count: int32]
+[ILDelta bytes]
+```
+
+#### Metadata Delta Format
+
+The metadata delta must follow the PE (Portable Executable) file format structure and specifically target the metadata section. The metadata section contains:
+
+1. **Metadata Tables**:
+   - TypeDef table (0x02)
+   - MethodDef table (0x06)
+   - FieldDef table (0x04)
+   - ParamDef table (0x08)
+   - InterfaceImpl table (0x09)
+   - MemberRef table (0x0A)
+   - Constant table (0x0B)
+   - CustomAttribute table (0x0C)
+   - FieldMarshal table (0x0D)
+   - DeclSecurity table (0x0E)
+   - ClassLayout table (0x0F)
+   - FieldLayout table (0x10)
+   - StandAloneSig table (0x11)
+   - EventMap table (0x12)
+   - Event table (0x14)
+   - PropertyMap table (0x15)
+   - Property table (0x17)
+   - MethodSemantics table (0x18)
+   - MethodImpl table (0x19)
+   - ModuleRef table (0x1A)
+   - TypeSpec table (0x1B)
+   - ImplMap table (0x1C)
+   - FieldRVA table (0x1D)
+   - Assembly table (0x20)
+   - AssemblyRef table (0x23)
+   - File table (0x26)
+   - ExportedType table (0x27)
+   - ManifestResource table (0x28)
+   - NestedClass table (0x29)
+   - GenericParam table (0x2A)
+   - MethodSpec table (0x2B)
+   - GenericParamConstraint table (0x2C)
+
+2. **Metadata Streams**:
+   - #Strings stream
+   - #Blob stream
+   - #GUID stream
+   - #US stream
+
+The metadata delta should only include changes to these tables and streams, not the entire metadata section.
+
+#### IL Delta Format
+
+The IL delta contains changes to method bodies and must follow the Common Intermediate Language (CIL) format. Each method body change includes:
+
+1. **Method Header**:
+   - Flags (2 bytes)
+   - MaxStack (2 bytes)
+   - CodeSize (4 bytes)
+   - LocalVarSigTok (4 bytes)
+
+2. **Method Body**:
+   - CIL instructions
+   - Exception handling clauses
+   - Local variable signatures
+
+The IL delta should only include the changed method bodies, not the entire IL section.
+
+#### PDB Delta Format
+
+The PDB delta contains changes to debug information and must follow the Portable PDB format. It includes:
+
+1. **Document Table**:
+   - Source file information
+   - Language information
+   - Hash information
+
+2. **MethodDebugInformation Table**:
+   - Sequence points
+   - Local scopes
+   - State machine information
+
+3. **LocalScope Table**:
+   - Variable information
+   - Constant information
+   - Import scope information
+
+#### Generation Process
+
+1. **Change Detection**:
+   - Use F# Compiler Service to detect changes in source files
+   - Track changes at the method and type level
+   - Identify which metadata tables and streams are affected
+
+2. **Delta Generation**:
+   - For metadata deltas:
+     - Compare metadata tables between old and new compilation
+     - Generate minimal changes to affected tables
+     - Update string, blob, and GUID streams as needed
+   
+   - For IL deltas:
+     - Compare method bodies between old and new compilation
+     - Generate new IL for changed methods
+     - Preserve method tokens and signatures
+   
+   - For PDB deltas:
+     - Compare debug information between old and new compilation
+     - Update sequence points and local scopes
+     - Preserve document and method debug information
+
+3. **Delta Application**:
+   - Use `MetadataUpdater.ApplyUpdate` to apply the deltas
+   - Handle state preservation through `MetadataUpdateHandlerAttribute`
+   - Clear reflection caches as needed
+   - Update application state through `UpdateApplication` method
+
+#### Implementation Notes
+
+1. **Module Identification**:
+   - Use `Module.ModuleVersionId` to identify modules
+   - Each assembly typically has one module
+   - Module IDs must be preserved across updates
+
+2. **State Preservation**:
+   - Use `MetadataUpdateHandlerAttribute` to mark types that handle updates
+   - Implement `ClearCache` and `UpdateApplication` methods
+   - Handle reflection-based caches appropriately
+
+3. **Error Handling**:
+   - Track `HotReloadResult` for each update
+   - Handle rude edits appropriately
+   - Provide detailed diagnostics for failures
+
+4. **Performance Considerations**:
+   - Generate minimal deltas
+   - Preserve token mappings
+   - Handle metadata table updates efficiently
+   - Optimize IL generation for changed methods
+
+   

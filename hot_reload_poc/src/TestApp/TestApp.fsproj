@@ -17,11 +17,14 @@
   <ItemGroup>
     <Compile Include="SimpleTest.fs" />
     <Compile Include="DeltaVerification.fs" />
+    <Compile Include="HotReloadTest.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="9.0.202" />
+    <PackageReference Update="FSharp.Core" Version="9.0.300-beta.25181.1" />
+    <PackageReference Include="FSharp.Compiler.Service" Version="43.9.300-preview.25181.1" />
+    <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
     <ProjectReference Include="..\HotReloadAgent\HotReloadAgent.fsproj" />
   </ItemGroup>
 

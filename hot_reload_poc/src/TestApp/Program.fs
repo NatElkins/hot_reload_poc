@@ -11,11 +11,18 @@ open System.Runtime.Loader
 open HotReloadAgent
 
 module Program =
+    // Can be invoked like DOTNET_MODIFIABLE_ASSEMBLIES=debug dotnet run -- test
+    // Setting DOTNET_MODIFIABLE_ASSEMBLIES=debug is essential for hot reloading to work
+    // Debug must be set to true and optimize must be set to false as well
     [<EntryPoint>]
     let main argv =
         match argv with
         | [| "verify" |] ->
             DeltaVerification.verifyDeltas()
+            0
+        | [| "test" |] ->
+            HotReloadTest.runTest()
+            |> Async.RunSynchronously
             0
         | [| "run" |] ->
             // Create a custom AssemblyLoadContext that allows updates
@@ -48,5 +55,5 @@ module Program =
             HotReloadAgent.dispose agent
             0
         | _ ->
-            printfn "Usage: TestApp.exe [verify | run]"
+            printfn "Usage: TestApp.exe [verify | test | run]"
             1

@@ -7,55 +7,48 @@ open System.Reflection.Metadata
 open System.Collections.Immutable
 
 type HotReloadAgent = {
-    FileWatcher: FileWatcher
     DeltaGenerator: DeltaGenerator
     TargetAssembly: Assembly
-    TypeName: string
-    MethodName: string
+    CurrentValue: int
 }
 
 module HotReloadAgent =
-    let create (targetAssembly: Assembly) (watchPath: string) (fileFilter: string) (typeName: string) (methodName: string) =
+    let create (targetAssembly: Assembly) (initialValue: int) =
         printfn "[HotReloadAgent] Creating agent for assembly: %s" targetAssembly.FullName
-        printfn "[HotReloadAgent] Watching path: %s with filter: %s" watchPath fileFilter
-        printfn "[HotReloadAgent] Will update method: %s in type: %s" methodName typeName
+        printfn "[HotReloadAgent] Initial value: %d" initialValue
         
         let deltaGenerator = DeltaGenerator.create()
         
-        let handleFileChange (event: FileChangeEvent) =
-            async {
-                printfn "[HotReloadAgent] File change detected: %s" event.FilePath
-                match! DeltaGenerator.generateDelta deltaGenerator targetAssembly event.FilePath typeName methodName with
-                | Some delta ->
-                    try
-                        printfn "[HotReloadAgent] Applying update to assembly..."
-                        // Apply the delta to the running assembly
-                        MetadataUpdater.ApplyUpdate(
-                            targetAssembly,
-                            delta.MetadataDelta.AsSpan(),
-                            delta.ILDelta.AsSpan(),
-                            delta.PdbDelta.AsSpan()
-                        )
-                        printfn "[HotReloadAgent] Successfully applied changes to %s" event.FilePath
-                    with ex ->
-                        printfn "[HotReloadAgent] Failed to apply changes: %s" ex.Message
-                | None ->
-                    printfn "[HotReloadAgent] No delta generated for changes"
-            }
-            |> Async.Start
-
-        let fileWatcher = FileWatcher.create watchPath fileFilter handleFileChange
-        printfn "[HotReloadAgent] File watcher created successfully"
-
         {
-            FileWatcher = fileWatcher
             DeltaGenerator = deltaGenerator
             TargetAssembly = targetAssembly
-            TypeName = typeName
-            MethodName = methodName
+            CurrentValue = initialValue
+        }
+
+    let updateValue (agent: HotReloadAgent) (newValue: int) =
+        async {
+            printfn "[HotReloadAgent] Updating value from %d to %d" agent.CurrentValue newValue
+            match! DeltaGenerator.generateDelta agent.DeltaGenerator agent.TargetAssembly newValue with
+            | Some delta ->
+                try
+                    printfn "[HotReloadAgent] Applying update to assembly..."
+                    // Apply the delta to the running assembly
+                    MetadataUpdater.ApplyUpdate(
+                        agent.TargetAssembly,
+                        delta.MetadataDelta.AsSpan(),
+                        delta.ILDelta.AsSpan(),
+                        delta.PdbDelta.AsSpan()
+                    )
+                    printfn "[HotReloadAgent] Successfully applied changes"
+                    return Some { agent with CurrentValue = newValue }
+                with ex ->
+                    printfn "[HotReloadAgent] Failed to apply changes: %s" ex.Message
+                    return None
+            | None ->
+                printfn "[HotReloadAgent] No delta generated for changes"
+                return None
         }
 
     let dispose (agent: HotReloadAgent) =
         printfn "[HotReloadAgent] Disposing agent..."
-        FileWatcher.dispose agent.FileWatcher
         printfn "[HotReloadAgent] Agent disposed successfully" 

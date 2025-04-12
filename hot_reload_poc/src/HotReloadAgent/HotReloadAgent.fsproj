@@ -1,13 +1,18 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <OutputType>Library</OutputType>
+    <RootNamespace>HotReloadAgent</RootNamespace>
+    <AssemblyName>HotReloadAgent</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarnOn>3390;$(WarnOn)</WarnOn>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Prelude.fs" />
+    <Compile Include="InMemoryCompiler.fs" />
     <Compile Include="FileWatcher.fs" />
     <Compile Include="DeltaGenerator.fs" />
     <Compile Include="HotReloadAgent.fs" />
@@ -15,10 +20,11 @@
 
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="9.0.202" />
-    <PackageReference Include="FSharp.Compiler.Service" Version="43.9.202" />
+    <PackageReference Include="FSharp.Compiler.Service" Version="45.0.0" />
     <PackageReference Include="System.IO.Pipes" Version="4.3.0" />
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
+    <PackageReference Include="System.Reflection.PortableExecutable" Version="8.0.0" />
     <PackageReference Include="Microsoft.CodeAnalysis" Version="4.8.0" />
   </ItemGroup>
 

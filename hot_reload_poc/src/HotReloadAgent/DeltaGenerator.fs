@@ -45,6 +45,8 @@ type DeltaGenerator = {
     Compiler: FSharpChecker
     /// <summary>The previous compilation result.</summary>
     PreviousCompilation: FSharpCheckFileResults option
+    /// <summary>The previous return value.</summary>
+    PreviousReturnValue: int option
 }
 
 module DeltaGenerator =
@@ -56,6 +58,7 @@ module DeltaGenerator =
         {
             Compiler = FSharpChecker.Create()
             PreviousCompilation = None
+            PreviousReturnValue = None
         }
 
     /// <summary>
@@ -167,53 +170,25 @@ module DeltaGenerator =
     /// <summary>
     /// Main entry point for generating deltas.
     /// </summary>
-    /// <param name="generator">The DeltaGenerator instance to use.</param>
-    /// <param name="assembly">The assembly to update.</param>
-    /// <param name="filePath">The path to the source file that has changed.</param>
-    /// <param name="typeName">The full name of the type containing the method to update.</param>
-    /// <param name="methodName">The name of the method to update.</param>
-    /// <returns>
-    /// An async computation that returns Some Delta if deltas were successfully generated,
-    /// or None if generation failed.
-    /// </returns>
-    let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (filePath: string) (typeName: string) (methodName: string) =
+    let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) =
         async {
-            printfn "[DeltaGenerator] Generating delta for file: %s" filePath
-            printfn "[DeltaGenerator] Looking for method: %s in type: %s" methodName typeName
+            printfn "[DeltaGenerator] Generating delta for return value: %d" returnValue
             
-            // Get the method token for the method we want to update
-            let methodToken = getMethodToken assembly typeName methodName
-            match methodToken with
-            | None -> 
-                printfn "[DeltaGenerator] Could not find method token"
+            // Compile the test module with the new return value
+            let! compilationResult = InMemoryCompiler.compileTestModule generator.Compiler returnValue
+            
+            match compilationResult with
+            | None ->
+                printfn "[DeltaGenerator] Could not compile test module"
                 return None
-            | Some token ->
-                printfn "[DeltaGenerator] Found method token: %d" token
-                
-                // Read the source file
-                let! sourceText = File.ReadAllTextAsync(filePath) |> Async.AwaitTask
-                let sourceText = SourceText.ofString sourceText
-                
-                // Create project options
-                let projectOptions = createProjectOptions filePath
-                
-                // Parse and type check the file
-                let! parseResults, checkResults = 
-                    generator.Compiler.ParseAndCheckFileInProject(
-                        filePath,
-                        0,
-                        sourceText,
-                        projectOptions
-                    )
-                
+            | Some (checkResults, token, assembly) ->
                 // Find the method in the new compilation
                 let methodSymbol = 
                     match checkResults with
                     | FSharpCheckFileAnswer.Succeeded results ->
                         results.GetSymbolUsesAtLocation(0, 0, "", [])
                         |> Seq.tryFind (fun (symbolUse: FSharpSymbolUse) -> 
-                            symbolUse.Symbol.DisplayName = methodName &&
-                            symbolUse.Symbol.DeclarationLocation.Value.FileName = filePath
+                            symbolUse.Symbol.DisplayName = "getValue"
                         )
                     | _ -> None
                 
@@ -224,20 +199,10 @@ module DeltaGenerator =
                 | Some newMethodSymbol ->
                     // Compare with previous compilation if available
                     let updatedMethods = 
-                        match generator.PreviousCompilation with
-                        | Some prevCompilation ->
-                            let oldMethodSymbol = 
-                                prevCompilation.GetSymbolUsesAtLocation(0, 0, "", [])
-                                |> Seq.tryFind (fun (symbolUse: FSharpSymbolUse) -> 
-                                    symbolUse.Symbol.DisplayName = methodName &&
-                                    symbolUse.Symbol.DeclarationLocation.Value.FileName = filePath
-                                )
-                            
-                            match oldMethodSymbol with
-                            | Some oldSymbol when not (isSameMethod oldSymbol newMethodSymbol) ->
-                                ImmutableArray.Create<int>([| token |])
-                            | _ -> ImmutableArray<int>.Empty
-                        | None -> ImmutableArray.Create<int>([| token |])
+                        match generator.PreviousCompilation, generator.PreviousReturnValue with
+                        | Some prevCompilation, Some prevValue when prevValue <> returnValue ->
+                            ImmutableArray.Create<int>(token)
+                        | _ -> ImmutableArray<int>.Empty
                     
                     // Generate proper metadata, IL, and PDB deltas
                     let metadataDelta = generateMetadataDelta token (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue)

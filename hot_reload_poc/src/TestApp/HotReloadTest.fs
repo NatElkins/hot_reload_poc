@@ -209,10 +209,6 @@ let getValue() = {0}
                     printfn "  - Module scope: %s" modifiedAssembly.ManifestModule.ScopeName
                     printfn "  - Module fully qualified name: %s" modifiedAssembly.ManifestModule.FullyQualifiedName
                     
-                    // Check if the assembly is a runtime assembly
-                    if not (originalAssembly.GetType().FullName.StartsWith("System.Runtime")) then
-                        printfn "[HotReloadTest] Warning: Assembly is not a runtime assembly"
-                    
                     // Check if metadata updates are supported
                     if not (MetadataUpdater.IsSupported) then
                         printfn "[HotReloadTest] Error: Metadata updates are not supported"
@@ -246,42 +242,22 @@ let getValue() = {0}
                         let pdbBytes = delta.PdbDelta.AsSpan().ToArray()
                         printfn "  - PDB delta first 16 bytes: %A" (if pdbBytes.Length >= 16 then pdbBytes |> Array.take 16 else pdbBytes)
                         
-                        // Apply the update
+                        // Load the assembly in a custom context
+                        let alc = new AssemblyLoadContext("HotReloadTestContext", true)
+                        let assembly = alc.LoadFromAssemblyPath(originalDll)
+                        
                         try
-                            printfn "[HotReloadTest] Attempting to apply update..."
+                            MetadataUpdater.ApplyUpdate(
+                                assembly,
+                                delta.MetadataDelta.AsSpan(),
+                                delta.ILDelta.AsSpan(),
+                                delta.PdbDelta.AsSpan()
+                            )
+                            printfn "[HotReloadTest] Update applied successfully"
                             
-                            // Try loading the assembly in the default context first
-                            let defaultAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(originalDll)
-                            try
-                                MetadataUpdater.ApplyUpdate(
-                                    defaultAssembly,
-                                    delta.MetadataDelta.AsSpan(),
-                                    delta.ILDelta.AsSpan(),
-                                    delta.PdbDelta.AsSpan()
-                                )
-                                printfn "[HotReloadTest] Update applied successfully to default context"
-                                
-                                // Verify the update
-                                let newValue = getValueMethod.Invoke(null, [||]) :?> int
-                                printfn "New value after update: %d" newValue
-                            with ex ->
-                                printfn "[HotReloadTest] Failed to apply update to default context: %A" ex
-                                printfn "[HotReloadTest] Trying custom context..."
-                                
-                                // Try the custom context as fallback
-                                MetadataUpdater.ApplyUpdate(
-                                    originalAssembly,
-                                    delta.MetadataDelta.AsSpan(),
-                                    delta.ILDelta.AsSpan(),
-                                    delta.PdbDelta.AsSpan()
-                                )
-                                printfn "[HotReloadTest] Update applied successfully to custom context"
-                                
-                                // Verify the update
-                                let newValue = getValueMethod.Invoke(null, [||]) :?> int
-                                printfn "New value after update: %d" newValue
-                            
-                            return ()
+                            // Verify the update
+                            let newValue = getValueMethod.Invoke(null, [||]) :?> int
+                            printfn "New value after update: %d" newValue
                         with ex ->
                             printfn "[HotReloadTest] Failed to apply update: %A" ex
                             printfn "[HotReloadTest] Exception details:"
@@ -289,9 +265,8 @@ let getValue() = {0}
                             printfn "  - Stack trace: %s" ex.StackTrace
                             if ex.InnerException <> null then
                                 printfn "  - Inner exception: %A" ex.InnerException
-                            return ()
-
-                    // Clean up
-                    try Directory.Delete(tempDir, true) with _ -> ()
-                    return ()
+                        
+                        // Clean up
+                        try Directory.Delete(tempDir, true) with _ -> ()
+                        return ()
         } 

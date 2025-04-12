@@ -10,6 +10,7 @@ open System.Runtime.Loader
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Text
 open FSharp.Compiler.Symbols
+open HotReloadAgent
 
 module HotReloadTest =
     /// Template for our test module
@@ -149,40 +150,146 @@ let getValue() = {0}
                     use originalReader = new PEReader(File.OpenRead(originalDll))
                     use modifiedReader = new PEReader(File.OpenRead(modifiedDll))
                     
-                    // Get the entire PE image
-                    let originalImage = originalReader.GetEntireImage()
-                    let modifiedImage = modifiedReader.GetEntireImage()
+                    // Run mdv on both versions for verification
+                    printfn "[HotReloadTest] Running mdv verification..."
+                    let originalMdvOutput = Path.Combine(tempDir, "original_mdv.txt")
+                    let modifiedMdvOutput = Path.Combine(tempDir, "modified_mdv.txt")
                     
-                    // Convert ImmutableArray to byte array
-                    let toByteArray (immutableArray: ImmutableArray<byte>) =
-                        let array = Array.zeroCreate<byte> immutableArray.Length
-                        immutableArray.CopyTo(array)
-                        array
-                    
-                    // Calculate delta between two byte arrays
-                    let calculateDelta (newBytes: byte[]) (oldBytes: byte[]) =
-                        let delta = Array.zeroCreate<byte> newBytes.Length
-                        for i in 0 .. newBytes.Length - 1 do
-                            delta[i] <- newBytes[i] - oldBytes[i]
-                        delta
-                    
-                    // Get the metadata and IL deltas
-                    let originalContent = toByteArray (originalImage.GetContent())
-                    let modifiedContent = toByteArray (modifiedImage.GetContent())
-                    let metadataDelta = calculateDelta modifiedContent originalContent
-                    let ilDelta = calculateDelta modifiedContent originalContent
-                    
-                    // Apply the update without PDB data
-                    MetadataUpdater.ApplyUpdate(
-                        originalAssembly,
-                        metadataDelta.AsSpan(),
-                        ilDelta.AsSpan(),
-                        ReadOnlySpan<byte>.Empty
-                    )
+                    let runMdv (dllPath: string) (outputPath: string) =
+                        let processStartInfo = System.Diagnostics.ProcessStartInfo()
+                        processStartInfo.FileName <- "/Users/nat/.dotnet/tools/mdv"
+                        processStartInfo.Arguments <- $"{Path.GetFileName(dllPath)} /il+ /md+ /stats+ /assemblyRefs+"
+                        processStartInfo.UseShellExecute <- false
+                        processStartInfo.RedirectStandardOutput <- true
+                        processStartInfo.RedirectStandardError <- true
+                        processStartInfo.WorkingDirectory <- Path.GetDirectoryName(dllPath)
 
-                    // Verify the update
-                    let newValue = getValueMethod.Invoke(null, [||]) :?> int
-                    printfn "New value after update: %d" newValue
+                        use proc = System.Diagnostics.Process.Start(processStartInfo)
+                        if proc = null then
+                            failwith "Failed to start mdv process. Make sure mdv is installed and in your PATH."
+                        
+                        let output = proc.StandardOutput.ReadToEnd()
+                        let error = proc.StandardError.ReadToEnd()
+                        proc.WaitForExit()
+
+                        if proc.ExitCode <> 0 then
+                            printfn "mdv process details:"
+                            printfn "  Exit Code: %d" proc.ExitCode
+                            printfn "  Standard Output: %s" output
+                            printfn "  Standard Error: %s" error
+                            failwithf "mdv failed with exit code %d" proc.ExitCode
+
+                        if String.IsNullOrWhiteSpace(output) then
+                            printfn "Warning: mdv produced no output"
+                            printfn "Standard Error: %s" error
+
+                        // Write output to file
+                        File.WriteAllText(outputPath, output)
+                        output
+
+                    printfn "[HotReloadTest] Running mdv on original version..."
+                    let originalMdv = runMdv originalDll originalMdvOutput
+                    printfn "[HotReloadTest] Running mdv on modified version..."
+                    let modifiedMdv = runMdv modifiedDll modifiedMdvOutput
+                    
+                    printfn "\n[HotReloadTest] Original Assembly Analysis:\n%s" originalMdv
+                    printfn "\n[HotReloadTest] Modified Assembly Analysis:\n%s" modifiedMdv
+                    
+                    // Print detailed information about the original and modified assemblies
+                    printfn "[HotReloadTest] Original assembly metadata:"
+                    printfn "  - Module version ID: %A" originalAssembly.ManifestModule.ModuleVersionId
+                    printfn "  - Module name: %s" originalAssembly.ManifestModule.Name
+                    printfn "  - Module scope: %s" originalAssembly.ManifestModule.ScopeName
+                    printfn "  - Module fully qualified name: %s" originalAssembly.ManifestModule.FullyQualifiedName
+                    
+                    printfn "[HotReloadTest] Modified assembly metadata:"
+                    let modifiedAssembly = Assembly.LoadFrom(modifiedDll)
+                    printfn "  - Module version ID: %A" modifiedAssembly.ManifestModule.ModuleVersionId
+                    printfn "  - Module name: %s" modifiedAssembly.ManifestModule.Name
+                    printfn "  - Module scope: %s" modifiedAssembly.ManifestModule.ScopeName
+                    printfn "  - Module fully qualified name: %s" modifiedAssembly.ManifestModule.FullyQualifiedName
+                    
+                    // Check if the assembly is a runtime assembly
+                    if not (originalAssembly.GetType().FullName.StartsWith("System.Runtime")) then
+                        printfn "[HotReloadTest] Warning: Assembly is not a runtime assembly"
+                    
+                    // Check if metadata updates are supported
+                    if not (MetadataUpdater.IsSupported) then
+                        printfn "[HotReloadTest] Error: Metadata updates are not supported"
+                        return ()
+                    
+                    // Create the delta generator
+                    let generator = DeltaGenerator.create()
+                    
+                    // Generate the delta
+                    let! delta = DeltaGenerator.generateDelta generator originalAssembly 43
+                    
+                    match delta with
+                    | None ->
+                        printfn "[HotReloadTest] Failed to generate delta"
+                        return ()
+                    | Some delta ->
+                        printfn "[HotReloadTest] Generated delta:"
+                        printfn "  - Metadata: %d bytes" delta.MetadataDelta.Length
+                        printfn "  - IL: %d bytes" delta.ILDelta.Length
+                        printfn "  - PDB: %d bytes" delta.PdbDelta.Length
+                        printfn "  - Updated methods: %A" delta.UpdatedMethods
+                        printfn "  - Updated types: %A" delta.UpdatedTypes
+                        
+                        // Print detailed information about the deltas
+                        printfn "[HotReloadTest] Delta details:"
+                        printfn "  - Module ID: %A" delta.ModuleId
+                        let metadataBytes = delta.MetadataDelta.AsSpan().ToArray()
+                        printfn "  - Metadata delta first 16 bytes: %A" (if metadataBytes.Length >= 16 then metadataBytes |> Array.take 16 else metadataBytes)
+                        let ilBytes = delta.ILDelta.AsSpan().ToArray()
+                        printfn "  - IL delta first 16 bytes: %A" (if ilBytes.Length >= 16 then ilBytes |> Array.take 16 else ilBytes)
+                        let pdbBytes = delta.PdbDelta.AsSpan().ToArray()
+                        printfn "  - PDB delta first 16 bytes: %A" (if pdbBytes.Length >= 16 then pdbBytes |> Array.take 16 else pdbBytes)
+                        
+                        // Apply the update
+                        try
+                            printfn "[HotReloadTest] Attempting to apply update..."
+                            
+                            // Try loading the assembly in the default context first
+                            let defaultAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(originalDll)
+                            try
+                                MetadataUpdater.ApplyUpdate(
+                                    defaultAssembly,
+                                    delta.MetadataDelta.AsSpan(),
+                                    delta.ILDelta.AsSpan(),
+                                    delta.PdbDelta.AsSpan()
+                                )
+                                printfn "[HotReloadTest] Update applied successfully to default context"
+                                
+                                // Verify the update
+                                let newValue = getValueMethod.Invoke(null, [||]) :?> int
+                                printfn "New value after update: %d" newValue
+                            with ex ->
+                                printfn "[HotReloadTest] Failed to apply update to default context: %A" ex
+                                printfn "[HotReloadTest] Trying custom context..."
+                                
+                                // Try the custom context as fallback
+                                MetadataUpdater.ApplyUpdate(
+                                    originalAssembly,
+                                    delta.MetadataDelta.AsSpan(),
+                                    delta.ILDelta.AsSpan(),
+                                    delta.PdbDelta.AsSpan()
+                                )
+                                printfn "[HotReloadTest] Update applied successfully to custom context"
+                                
+                                // Verify the update
+                                let newValue = getValueMethod.Invoke(null, [||]) :?> int
+                                printfn "New value after update: %d" newValue
+                            
+                            return ()
+                        with ex ->
+                            printfn "[HotReloadTest] Failed to apply update: %A" ex
+                            printfn "[HotReloadTest] Exception details:"
+                            printfn "  - Message: %s" ex.Message
+                            printfn "  - Stack trace: %s" ex.StackTrace
+                            if ex.InnerException <> null then
+                                printfn "  - Inner exception: %A" ex.InnerException
+                            return ()
 
                     // Clean up
                     try Directory.Delete(tempDir, true) with _ -> ()

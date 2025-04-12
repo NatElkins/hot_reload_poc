@@ -1,4 +1,5 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -12,6 +13,12 @@
     <EmitDebugInformation>true</EmitDebugInformation>
     <DeterministicSourcePaths>false</DeterministicSourcePaths>
     <DeltaScript>deltascript.json</DeltaScript>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <UseAppHost>true</UseAppHost>
+    <PreserveCompilationContext>true</PreserveCompilationContext>
   </PropertyGroup>
 
   <ItemGroup>

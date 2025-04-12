@@ -10,7 +10,6 @@ open FSharp.Compiler.Symbols
 open System
 open System.IO
 open System.Reflection
-open System.Reflection.Emit
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
@@ -47,8 +46,6 @@ type DeltaGenerator = {
     PreviousCompilation: FSharpCheckFileResults option
     /// <summary>The previous return value.</summary>
     PreviousReturnValue: int option
-    /// <summary>The previous metadata reader.</summary>
-    PreviousMetadataReader: MetadataReader option
 }
 
 module DeltaGenerator =
@@ -61,184 +58,207 @@ module DeltaGenerator =
             Compiler = FSharpChecker.Create()
             PreviousCompilation = None
             PreviousReturnValue = None
-            PreviousMetadataReader = None
         }
 
     /// <summary>
-    /// Gets the method token for a method in an assembly.
+    /// Gets the method token and name for a method in an assembly.
     /// </summary>
-    /// <param name="assembly">The assembly containing the method.</param>
-    /// <param name="typeName">The full name of the type containing the method.</param>
-    /// <param name="methodName">The name of the method.</param>
-    /// <returns>The method token if found, None otherwise.</returns>
-    let getMethodToken (assembly: Assembly) (typeName: string) (methodName: string) =
+    let getMethodInfo (assembly: Assembly) (typeName: string) (methodName: string) =
+        printfn "[DeltaGenerator] Looking for method %s in type %s" methodName typeName
         let typ = assembly.GetType(typeName)
         if typ = null then 
             printfn "[DeltaGenerator] Could not find type: %s" typeName
+            printfn "[DeltaGenerator] Available types: %A" (assembly.GetTypes() |> Array.map (fun t -> t.FullName))
             None
         else
+            printfn "[DeltaGenerator] Found type: %s" typ.FullName
             let method = typ.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
             if method = null then 
                 printfn "[DeltaGenerator] Could not find method: %s in type: %s" methodName typeName
+                printfn "[DeltaGenerator] Available methods: %A" (typ.GetMethods() |> Array.map (fun m -> m.Name))
                 None
             else 
-                printfn "[DeltaGenerator] Found method token: %d" method.MetadataToken
-                Some method.MetadataToken
-
-    /// <summary>
-    /// Compares two F# symbol uses to determine if they represent the same method.
-    /// </summary>
-    let private isSameMethod (oldUse: FSharpSymbolUse) (newUse: FSharpSymbolUse) =
-        oldUse.Symbol.FullName = newUse.Symbol.FullName &&
-        oldUse.Symbol.DeclarationLocation.Value.FileName = newUse.Symbol.DeclarationLocation.Value.FileName
-
-    /// <summary>
-    /// Creates project options for a single file.
-    /// </summary>
-    let private createProjectOptions (filePath: string) =
-        let projectOptions = {
-            ProjectFileName = filePath
-            ProjectId = None
-            SourceFiles = [| filePath |]
-            OtherOptions = [||]
-            ReferencedProjects = [||]
-            IsIncompleteTypeCheckEnvironment = false
-            UseScriptResolutionRules = false
-            LoadTime = DateTime.Now
-            UnresolvedReferences = None
-            OriginalLoadReferences = []
-            Stamp = None
-        }
-        projectOptions
+                printfn "[DeltaGenerator] Found method: %s" method.Name
+                printfn "[DeltaGenerator] Method token: %d" method.MetadataToken
+                printfn "[DeltaGenerator] Method attributes: %A" method.Attributes
+                printfn "[DeltaGenerator] Method declaring type: %s" method.DeclaringType.FullName
+                printfn "[DeltaGenerator] Method declaring type token: %d" method.DeclaringType.MetadataToken
+                Some (method.MetadataToken, method.Name, method.DeclaringType.MetadataToken)
 
     /// <summary>
     /// Generates metadata delta for a method update.
     /// </summary>
-    let private generateMetadataDelta (methodToken: int) (newMethod: FSharpMemberOrFunctionOrValue) (previousReader: MetadataReader option) =
+    let private generateMetadataDelta (methodToken: int) (methodName: string) (declaringTypeToken: int) =
+        printfn "[DeltaGenerator] Generating metadata delta for method %s (token: %d)" methodName methodToken
         let metadataBuilder = new MetadataBuilder()
-        let ilBuilder = new BlobBuilder()
         
-        // Create method definition
+        // Create method definition handle
         let methodDef = MetadataTokens.MethodDefinitionHandle(methodToken)
-        
-        // Add method to metadata with proper attributes and signature
-        let methodAttributes = 
-            if not newMethod.IsInstanceMember then MethodAttributes.Public ||| MethodAttributes.Static
-            else MethodAttributes.Public
-            
-        let methodImplAttributes = MethodImplAttributes.IL ||| MethodImplAttributes.Managed
+        printfn "[DeltaGenerator] Created method definition handle: %d" (methodDef.GetHashCode())
         
         // Generate method signature
+        printfn "[DeltaGenerator] Generating method signature"
         let signatureBuilder = new BlobBuilder()
-        // TODO: Generate proper signature based on method parameters and return type
+        let encoder = new BlobEncoder(signatureBuilder)
+        let methodSigEncoder = encoder.MethodSignature(SignatureCallingConvention.Default, 0, isInstanceMethod = false)
         
-        metadataBuilder.AddMethodDefinition(
-            methodAttributes,
-            methodImplAttributes,
-            metadataBuilder.GetOrAddString(newMethod.DisplayName),
-            metadataBuilder.GetOrAddBlob(signatureBuilder.ToArray()),
-            0,
+        // Encode return type and parameters
+        methodSigEncoder.Parameters(
+            0, 
+            (fun (returnType: ReturnTypeEncoder) -> returnType.Type().Int32()),
+            (fun (parameters: ParametersEncoder) -> ())
+        )
+        
+        // Add method definition update
+        printfn "[DeltaGenerator] Adding method definition update"
+        let methodHandle = metadataBuilder.AddMethodDefinition(
+            MethodAttributes.Public ||| MethodAttributes.Static,
+            MethodImplAttributes.IL ||| MethodImplAttributes.Managed,
+            metadataBuilder.GetOrAddString(methodName),
+            metadataBuilder.GetOrAddBlob(signatureBuilder.ToArray()), // Use the generated signature
+            declaringTypeToken, // Use the raw token value
             MetadataTokens.ParameterHandle(0)
         )
         
+        // Add method debug information
+        printfn "[DeltaGenerator] Adding method debug information"
+        let documentHandle = metadataBuilder.AddDocument(
+            metadataBuilder.GetOrAddDocumentName("SimpleTest.fs"),
+            metadataBuilder.GetOrAddGuid(Guid.Empty),
+            metadataBuilder.GetOrAddBlob([||]),
+            metadataBuilder.GetOrAddGuid(Guid.Empty)
+        )
+        
+        let methodDebugBuilder = new BlobBuilder()
+        methodDebugBuilder.WriteByte(0x01uy) // Document count
+        methodDebugBuilder.WriteByte(0x00uy) // Document index
+        methodDebugBuilder.WriteByte(0x00uy) // Line count
+        let methodDebugHandle = metadataBuilder.AddMethodDebugInformation(
+            documentHandle,
+            metadataBuilder.GetOrAddBlob(methodDebugBuilder.ToArray())
+        )
+        
         // Add ENC log entry for the method update
+        printfn "[DeltaGenerator] Adding ENC log entry"
         metadataBuilder.AddEncLogEntry(
             methodDef,
             EditAndContinueOperation.AddMethod
         )
         
         // Add ENC map entry for token remapping
+        printfn "[DeltaGenerator] Adding ENC map entry"
         metadataBuilder.AddEncMapEntry(methodDef)
         
-        // Create metadata root builder
+        // Create metadata root builder with generation
+        printfn "[DeltaGenerator] Creating metadata root builder"
         let rootBuilder = new MetadataRootBuilder(metadataBuilder)
         
         // Serialize metadata
+        printfn "[DeltaGenerator] Serializing metadata"
         let metadataBlob = new BlobBuilder()
-        rootBuilder.Serialize(metadataBlob, 0, 0)
-        ImmutableArray.CreateRange(metadataBlob.ToArray())
+        rootBuilder.Serialize(metadataBlob, 1, 0) // Use generation 1 for the update
+        let metadataBytes = metadataBlob.ToArray()
+        printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" metadataBytes.Length
+        printfn "[DeltaGenerator] First 16 bytes of metadata: %A" (metadataBytes |> Array.take 16)
+        ImmutableArray.CreateRange(metadataBytes)
 
     /// <summary>
     /// Generates IL delta for a method update.
     /// </summary>
-    let private generateILDelta (newMethod: FSharpMemberOrFunctionOrValue) =
+    let private generateILDelta (returnValue: int) =
+        printfn "[DeltaGenerator] Generating IL delta for return value: %d" returnValue
         let ilBuilder = new BlobBuilder()
         
-        // Generate IL for the method body
-        // For now, we'll just generate a simple return value
+        // Method header
+        // Flags: 0x03 (Tiny format, no locals, no exceptions)
+        ilBuilder.WriteByte(0x03uy)
+        
+        // Code size: 3 bytes (ldc.i4.s + ret)
+        ilBuilder.WriteByte(0x03uy)
+        
+        // Method body
+        printfn "[DeltaGenerator] Writing IL instructions:"
+        printfn "  ldc.i4.s %d" returnValue
         ilBuilder.WriteByte(0x16uy) // ldc.i4.s
-        ilBuilder.WriteByte(43uy)   // 43
+        ilBuilder.WriteByte(byte returnValue) // The new return value
+        
+        printfn "  ret"
         ilBuilder.WriteByte(0x2Auy) // ret
         
-        ImmutableArray.CreateRange(ilBuilder.ToArray())
+        let ilBytes = ilBuilder.ToArray()
+        printfn "[DeltaGenerator] Generated IL bytes: %d bytes" ilBytes.Length
+        printfn "[DeltaGenerator] IL bytes: %A" ilBytes
+        ImmutableArray.CreateRange(ilBytes)
 
-    /// <summary>
-    /// Generates PDB delta for a method update.
-    /// </summary>
-    let private generatePdbDelta (methodToken: int) (newMethod: FSharpMemberOrFunctionOrValue) =
+    let private generatePDBDelta (methodToken: int) =
+        printfn "[DeltaGenerator] Generating PDB delta for method token: %d" methodToken
         let pdbBuilder = new BlobBuilder()
         
-        // Add sequence points for the method
-        let sequencePoints = [
-            // TODO: Add proper sequence points based on source locations
-            MetadataTokens.DocumentHandle(1),
-            0, 0, 0, 0, true
-        ]
+        // Add minimal PDB information
+        // Document table entry
+        pdbBuilder.WriteByte(0x01uy) // Document table entry count
+        pdbBuilder.WriteByte(0x00uy) // Document name index
+        pdbBuilder.WriteByte(0x00uy) // Document hash algorithm
+        pdbBuilder.WriteByte(0x00uy) // Document hash
         
-        // Serialize PDB information
-        let pdbBlob = pdbBuilder.ToArray()
-        ImmutableArray.CreateRange(pdbBlob)
+        // Method debug information
+        pdbBuilder.WriteByte(0x01uy) // Method debug info count
+        pdbBuilder.WriteInt32(methodToken) // Method token
+        pdbBuilder.WriteByte(0x00uy) // Sequence point count
+        
+        let pdbBytes = pdbBuilder.ToArray()
+        printfn "[DeltaGenerator] Generated PDB bytes: %d bytes" pdbBytes.Length
+        printfn "[DeltaGenerator] PDB bytes: %A" pdbBytes
+        ImmutableArray.CreateRange(pdbBytes)
 
     /// <summary>
     /// Main entry point for generating deltas.
     /// </summary>
     let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) =
         async {
-            printfn "[DeltaGenerator] Generating delta for return value: %d" returnValue
+            printfn "[DeltaGenerator] ===== Starting delta generation ====="
+            printfn "[DeltaGenerator] Assembly: %s" assembly.FullName
+            printfn "[DeltaGenerator] Module ID: %A" assembly.ManifestModule.ModuleVersionId
+            printfn "[DeltaGenerator] Target return value: %d" returnValue
             
-            // Compile the test module with the new return value
-            let! compilationResult = InMemoryCompiler.compileTestModule generator.Compiler returnValue
+            // Get the method token and name for getValue
+            let methodInfo = getMethodInfo assembly "SimpleTest" "getValue"
             
-            match compilationResult with
+            match methodInfo with
             | None ->
-                printfn "[DeltaGenerator] Could not compile test module"
+                printfn "[DeltaGenerator] Failed to find method info"
                 return None
-            | Some (checkResults, token, assembly) ->
-                // Find the method in the new compilation
-                let methodSymbol = 
-                    match checkResults with
-                    | FSharpCheckFileAnswer.Succeeded results ->
-                        results.GetSymbolUsesAtLocation(0, 0, "", [])
-                        |> Seq.tryFind (fun (symbolUse: FSharpSymbolUse) -> 
-                            symbolUse.Symbol.DisplayName = "getValue"
-                        )
-                    | _ -> None
+            | Some (token, methodName, declaringTypeToken) ->
+                printfn "[DeltaGenerator] Found method info: token=%d, name=%s, declaringType=%d" 
+                    token methodName declaringTypeToken
                 
-                match methodSymbol with
-                | None ->
-                    printfn "[DeltaGenerator] Could not find method symbol in new compilation"
-                    return None
-                | Some newMethodSymbol ->
-                    // Compare with previous compilation if available
-                    let updatedMethods = 
-                        match generator.PreviousCompilation, generator.PreviousReturnValue with
-                        | Some prevCompilation, Some prevValue when prevValue <> returnValue ->
-                            ImmutableArray.Create<int>(token)
-                        | _ -> ImmutableArray<int>.Empty
-                    
-                    // Generate proper metadata, IL, and PDB deltas
-                    let metadataDelta = generateMetadataDelta token (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue) generator.PreviousMetadataReader
-                    let ilDelta = generateILDelta (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue)
-                    let pdbDelta = generatePdbDelta token (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue)
-                    let updatedTypes = ImmutableArray<int>.Empty // TODO: Track updated types
-                    
-                    printfn "[DeltaGenerator] Generated delta with method token: %d" token
-                    return Some {
-                        ModuleId = assembly.ManifestModule.ModuleVersionId
-                        MetadataDelta = metadataDelta
-                        ILDelta = ilDelta
-                        PdbDelta = pdbDelta
-                        UpdatedTypes = updatedTypes
-                        UpdatedMethods = updatedMethods
-                    }
+                // Generate minimal metadata and IL deltas
+                printfn "[DeltaGenerator] Generating metadata delta..."
+                let metadataDelta = generateMetadataDelta token methodName declaringTypeToken
+                
+                printfn "[DeltaGenerator] Generating IL delta..."
+                let ilDelta = generateILDelta returnValue
+                
+                printfn "[DeltaGenerator] Generating PDB delta..."
+                let pdbDelta = generatePDBDelta token
+                
+                let updatedTypes = ImmutableArray<int>.Empty // Not needed for this case
+                let updatedMethods = ImmutableArray.Create<int>(token)
+                
+                printfn "[DeltaGenerator] Generated delta:"
+                printfn "  - Metadata: %d bytes" metadataDelta.Length
+                printfn "  - IL: %d bytes" ilDelta.Length
+                printfn "  - PDB: %d bytes" pdbDelta.Length
+                printfn "  - Updated methods: %A" updatedMethods
+                printfn "  - Updated types: %A" updatedTypes
+                printfn "[DeltaGenerator] ===== Delta generation complete ====="
+                
+                return Some {
+                    ModuleId = assembly.ManifestModule.ModuleVersionId
+                    MetadataDelta = metadataDelta
+                    ILDelta = ilDelta
+                    PdbDelta = pdbDelta
+                    UpdatedTypes = updatedTypes
+                    UpdatedMethods = updatedMethods
+                }
         } 

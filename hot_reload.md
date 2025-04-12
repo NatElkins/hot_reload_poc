@@ -174,6 +174,30 @@ When changes are applied:
 - .NET Hot Reload documentation
 - Concord Extensibility framework documentation
 
+### Key Reference Files
+
+1. Core Services and Interfaces:
+- `roslyn/src/Features/Core/Portable/Contracts/EditAndContinue/IManagedHotReloadService.cs`
+- `roslyn/src/Features/Core/Portable/ExternalAccess/Watch/Api/WatchHotReloadService.cs`
+
+2. Language Service Integration:
+- `roslyn/src/Workspaces/Remote/Core/EditAndContinue/ManagedHotReloadLanguageService.cs`
+- `roslyn/src/Workspaces/Remote/Core/EditAndContinue/ManagedHotReloadLanguageServiceDescriptor.cs`
+
+3. Diagnostic Handling:
+- `roslyn/src/LanguageServer/ExternalAccess/VisualDiagnostics/Internal/HotReloadDiagnosticSource.cs`
+- `roslyn/src/LanguageServer/ExternalAccess/VisualDiagnostics/Contracts/IHotReloadDiagnosticManager.cs`
+
+4. Remote Service Implementation:
+- `roslyn/src/Workspaces/Remote/Core/EditAndContinue/ManagedHotReloadServiceProxy.cs`
+- `roslyn/src/Workspaces/Remote/ServiceHub/Services/EditAndContinue/RemoteEditAndContinueService.cs`
+
+5. Update Application:
+- `roslyn/src/Features/Core/Portable/EditAndContinue/Utilities/Extensions.cs`
+
+6. Project Structure Reference:
+- `hot_reload_poc/src/HotReloadAgent/HotReloadAgent.fsproj`
+
 ## Technical Implementation Details
 
 ### Edit and Continue (EnC) Infrastructure

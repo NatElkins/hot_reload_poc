@@ -47,6 +47,8 @@ type DeltaGenerator = {
     PreviousCompilation: FSharpCheckFileResults option
     /// <summary>The previous return value.</summary>
     PreviousReturnValue: int option
+    /// <summary>The previous metadata reader.</summary>
+    PreviousMetadataReader: MetadataReader option
 }
 
 module DeltaGenerator =
@@ -59,6 +61,7 @@ module DeltaGenerator =
             Compiler = FSharpChecker.Create()
             PreviousCompilation = None
             PreviousReturnValue = None
+            PreviousMetadataReader = None
         }
 
     /// <summary>
@@ -111,22 +114,41 @@ module DeltaGenerator =
     /// <summary>
     /// Generates metadata delta for a method update.
     /// </summary>
-    let private generateMetadataDelta (methodToken: int) (newMethod: FSharpMemberOrFunctionOrValue) =
+    let private generateMetadataDelta (methodToken: int) (newMethod: FSharpMemberOrFunctionOrValue) (previousReader: MetadataReader option) =
         let metadataBuilder = new MetadataBuilder()
         let ilBuilder = new BlobBuilder()
         
         // Create method definition
         let methodDef = MetadataTokens.MethodDefinitionHandle(methodToken)
         
-        // Add method to metadata
+        // Add method to metadata with proper attributes and signature
+        let methodAttributes = 
+            if not newMethod.IsInstanceMember then MethodAttributes.Public ||| MethodAttributes.Static
+            else MethodAttributes.Public
+            
+        let methodImplAttributes = MethodImplAttributes.IL ||| MethodImplAttributes.Managed
+        
+        // Generate method signature
+        let signatureBuilder = new BlobBuilder()
+        // TODO: Generate proper signature based on method parameters and return type
+        
         metadataBuilder.AddMethodDefinition(
-            MethodAttributes.Public ||| MethodAttributes.Static,
-            MethodImplAttributes.IL ||| MethodImplAttributes.Managed,
+            methodAttributes,
+            methodImplAttributes,
             metadataBuilder.GetOrAddString(newMethod.DisplayName),
-            metadataBuilder.GetOrAddBlob(Array.empty<byte>), // TODO: Generate proper signature
+            metadataBuilder.GetOrAddBlob(signatureBuilder.ToArray()),
             0,
             MetadataTokens.ParameterHandle(0)
         )
+        
+        // Add ENC log entry for the method update
+        metadataBuilder.AddEncLogEntry(
+            methodDef,
+            EditAndContinueOperation.AddMethod
+        )
+        
+        // Add ENC map entry for token remapping
+        metadataBuilder.AddEncMapEntry(methodDef)
         
         // Create metadata root builder
         let rootBuilder = new MetadataRootBuilder(metadataBuilder)
@@ -205,7 +227,7 @@ module DeltaGenerator =
                         | _ -> ImmutableArray<int>.Empty
                     
                     // Generate proper metadata, IL, and PDB deltas
-                    let metadataDelta = generateMetadataDelta token (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue)
+                    let metadataDelta = generateMetadataDelta token (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue) generator.PreviousMetadataReader
                     let ilDelta = generateILDelta (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue)
                     let pdbDelta = generatePdbDelta token (newMethodSymbol.Symbol :?> FSharpMemberOrFunctionOrValue)
                     let updatedTypes = ImmutableArray<int>.Empty // TODO: Track updated types

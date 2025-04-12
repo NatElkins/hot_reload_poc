@@ -235,15 +235,28 @@ module DeltaGenerator =
                 // Generate minimal metadata and IL deltas
                 printfn "[DeltaGenerator] Generating metadata delta..."
                 let metadataDelta = generateMetadataDelta token methodName declaringTypeToken
+                printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
                 printfn "[DeltaGenerator] Generating IL delta..."
                 let ilDelta = generateILDelta returnValue
+                printfn "[DeltaGenerator] IL delta size: %d bytes" ilDelta.Length
                 
                 printfn "[DeltaGenerator] Generating PDB delta..."
                 let pdbDelta = generatePDBDelta token
+                printfn "[DeltaGenerator] PDB delta size: %d bytes" pdbDelta.Length
                 
-                let updatedTypes = ImmutableArray<int>.Empty // Not needed for this case
+                let updatedTypes = ImmutableArray<int>.Empty
                 let updatedMethods = ImmutableArray.Create<int>(token)
+                
+                // Ensure we're using the same ModuleId as the original assembly
+                let moduleId = assembly.ManifestModule.ModuleVersionId
+                printfn "[DeltaGenerator] Using module ID: %A" moduleId
+                
+                // Verify the deltas
+                printfn "[DeltaGenerator] Verifying deltas..."
+                printfn "  - Metadata delta first 16 bytes: %A" (metadataDelta.AsSpan().Slice(0, min 16 metadataDelta.Length).ToArray())
+                printfn "  - IL delta first 16 bytes: %A" (ilDelta.AsSpan().Slice(0, min 16 ilDelta.Length).ToArray())
+                printfn "  - PDB delta first 16 bytes: %A" (pdbDelta.AsSpan().Slice(0, min 16 pdbDelta.Length).ToArray())
                 
                 printfn "[DeltaGenerator] Generated delta:"
                 printfn "  - Metadata: %d bytes" metadataDelta.Length
@@ -254,7 +267,7 @@ module DeltaGenerator =
                 printfn "[DeltaGenerator] ===== Delta generation complete ====="
                 
                 return Some {
-                    ModuleId = assembly.ManifestModule.ModuleVersionId
+                    ModuleId = moduleId
                     MetadataDelta = metadataDelta
                     ILDelta = ilDelta
                     PdbDelta = pdbDelta

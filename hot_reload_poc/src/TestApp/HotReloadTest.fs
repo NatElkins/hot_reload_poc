@@ -26,15 +26,19 @@ let getValue() = {0}
     /// Compiles the test module with the given return value
     let compileTestModule (checker: FSharpChecker) (returnValue: int) (outputPath: string) =
         async {
+            printfn "[HotReloadTest] Starting compilation with return value: %d" returnValue
+            printfn "[HotReloadTest] Output path: %s" outputPath
+            
             // Create the source code with the given return value
             let sourceCode = String.Format(testModuleTemplate, returnValue)
             let sourceText = SourceText.ofString sourceCode
             let sourceFileName = Path.Combine(Path.GetTempPath(), "SimpleTest.fsx")
             
-            // Write source to file
+            printfn "[HotReloadTest] Writing source to: %s" sourceFileName
             File.WriteAllText(sourceFileName, sourceCode)
 
             // Get project options from script
+            printfn "[HotReloadTest] Getting project options..."
             let! projectOptions, _ = 
                 checker.GetProjectOptionsFromScript(
                     sourceFileName,
@@ -44,7 +48,8 @@ let getValue() = {0}
                     useFsiAuxLib = false
                 )
 
-            // Update output path in options
+            // Update output path in options with consistent settings
+            printfn "[HotReloadTest] Configuring compilation options..."
             let projectOptions = { 
                 projectOptions with 
                     OtherOptions = Array.append projectOptions.OtherOptions [| 
@@ -53,10 +58,13 @@ let getValue() = {0}
                         "--langversion:preview"
                         "--debug:full"
                         "--optimize-"
+                        "--deterministic"  // Add deterministic compilation
                     |] 
             }
+            printfn "[HotReloadTest] Compilation options: %A" projectOptions.OtherOptions
 
             // Parse and type check
+            printfn "[HotReloadTest] Parsing and type checking..."
             let! parseResults, checkResults = 
                 checker.ParseAndCheckFileInProject(
                     sourceFileName,
@@ -65,7 +73,25 @@ let getValue() = {0}
                     projectOptions
                 )
 
+            // Verify parse results
+            if parseResults.Diagnostics.Length > 0 then
+                printfn "[HotReloadTest] Parse diagnostics:"
+                for diag in parseResults.Diagnostics do
+                    printfn "  - %s" diag.Message
+
+            // Verify check results
+            match checkResults with
+            | FSharpCheckFileAnswer.Succeeded results ->
+                if results.Diagnostics.Length > 0 then
+                    printfn "[HotReloadTest] Type check diagnostics:"
+                    for diag in results.Diagnostics do
+                        printfn "  - %s" diag.Message
+            | FSharpCheckFileAnswer.Aborted ->
+                printfn "[HotReloadTest] Type checking aborted"
+                ()
+
             // Compile
+            printfn "[HotReloadTest] Compiling..."
             let! compileResult, exitCode =
                 checker.Compile(
                     [| "fsc.exe"
@@ -76,6 +102,7 @@ let getValue() = {0}
 
             match exitCode with
             | None ->
+                printfn "[HotReloadTest] Compilation successful"
                 // Get the method token for getValue
                 let methodToken = 
                     match checkResults with
@@ -92,6 +119,9 @@ let getValue() = {0}
                             let assembly = Assembly.LoadFrom(outputPath)
                             let typ = assembly.GetType(typeName)
                             let methodInfo = typ.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
+                            printfn "[HotReloadTest] Found method: %s in type: %s" methodName typeName
+                            printfn "[HotReloadTest] Method token: %d" methodInfo.MetadataToken
+                            printfn "[HotReloadTest] Method attributes: %A" methodInfo.Attributes
                             methodInfo.MetadataToken
                         )
                     | _ -> None

@@ -25,7 +25,7 @@ module Program =
             let assembly = alc.LoadFromAssemblyPath(Assembly.GetExecutingAssembly().Location)
             
             // Create the hot reload agent
-            let agent = HotReloadAgent.create assembly __SOURCE_DIRECTORY__ "*.fs" "SimpleTest" "getValue"
+            let agent = HotReloadAgent.create assembly 42
             
             printfn "Hot Reload Test Application"
             printfn "=========================="

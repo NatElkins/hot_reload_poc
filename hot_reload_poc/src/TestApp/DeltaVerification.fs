@@ -37,7 +37,7 @@ module DeltaVerification =
         }
 
         // Compile the file
-        let errors, exitCode = 
+        let errors, optExn = 
             checker.Compile(
                 [| "fsc.exe"
                    yield! options.OtherOptions
@@ -48,13 +48,12 @@ module DeltaVerification =
         // Clean up temporary script file
         try File.Delete(scriptPath) with _ -> ()
 
-        match exitCode with
-        | None -> 
+        if optExn = None then
             printfn "Compilation successful: %s" outputPath
             if not (Array.isEmpty errors) then
                 printfn "Warnings: %A" errors
-        | Some exn -> 
-            printfn "Compilation failed with error: %A" exn
+        else
+            printfn "Compilation failed with exn: %s" optExn.Value.Message
             printfn "Errors: %A" errors
             failwithf "Compilation failed"
 

@@ -7,10 +7,12 @@ open System.Reflection.Metadata
 open System.Reflection.PortableExecutable
 open System.Collections.Immutable
 open System.Runtime.Loader
+open System.Diagnostics
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Text
 open FSharp.Compiler.Symbols
 open HotReloadAgent
+open System.Runtime.CompilerServices
 
 module HotReloadTest =
     /// Template for our test module
@@ -92,7 +94,7 @@ let getValue() = {0}
 
             // Compile
             printfn "[HotReloadTest] Compiling..."
-            let! compileResult, exitCode =
+            let! compileResult, optExn =
                 checker.Compile(
                     [| "fsc.exe"
                        $"--out:{outputPath}"
@@ -100,8 +102,7 @@ let getValue() = {0}
                        sourceFileName |]
                 )
 
-            match exitCode with
-            | None ->
+            if optExn = None then
                 printfn "[HotReloadTest] Compilation successful"
                 // Get the method token for getValue
                 let methodToken = 
@@ -116,24 +117,19 @@ let getValue() = {0}
                             let method = symbolUse.Symbol :?> FSharpMemberOrFunctionOrValue
                             let typeName = method.DeclaringEntity.Value.FullName
                             let methodName = method.DisplayName
-                            let assembly = Assembly.LoadFrom(outputPath)
-                            let typ = assembly.GetType(typeName)
-                            let methodInfo = typ.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
                             printfn "[HotReloadTest] Found method: %s in type: %s" methodName typeName
-                            printfn "[HotReloadTest] Method token: %d" methodInfo.MetadataToken
-                            printfn "[HotReloadTest] Method attributes: %A" methodInfo.Attributes
-                            methodInfo.MetadataToken
+                            (typeName, methodName)
                         )
                     | _ -> None
 
                 match methodToken with
-                | Some token ->
-                    printfn "[HotReloadTest] Found method token: %d" token
-                    return Some (checkResults, token, outputPath)
+                | Some (typeName, methodName) ->
+                    printfn "[HotReloadTest] Found method: %s in type: %s" methodName typeName
+                    return Some (checkResults, (typeName, methodName), outputPath)
                 | None ->
                     printfn "[HotReloadTest] Could not find method token"
                     return None
-            | Some _ ->
+            else
                 printfn "[HotReloadTest] Compilation failed with errors: %A" compileResult
                 return None
         }
@@ -141,8 +137,8 @@ let getValue() = {0}
     /// Runs the hot reload test
     let runTest () =
         async {
-            // Create a custom AssemblyLoadContext
-            let alc = new AssemblyLoadContext("HotReloadTestContext", true)
+            // Use default AssemblyLoadContext instead of creating a custom one
+            let alc = AssemblyLoadContext.Default
             
             // Create temporary directory for our test files
             let tempDir = Path.Combine(Path.GetTempPath(), "HotReloadTest")
@@ -162,11 +158,32 @@ let getValue() = {0}
             let! originalResult = compileTestModule checker 42 originalDll
             match originalResult with
             | None -> return failwith "Failed to compile original version"
-            | Some (_, originalToken, _) ->
+            | Some (_, (typeName, methodName), _) ->
                 // Load and verify original version
                 let originalAssembly = alc.LoadFromAssemblyPath(originalDll)
-                let simpleTestType = originalAssembly.GetType("SimpleTest")
-                let getValueMethod = simpleTestType.GetMethod("getValue", BindingFlags.Public ||| BindingFlags.Static)
+                printfn "[HotReloadTest] Original assembly loaded:"
+                printfn "  - Name: %s" originalAssembly.FullName
+                printfn "  - Location: %s" originalAssembly.Location
+                printfn "  - IsCollectible: %b" originalAssembly.IsCollectible
+                printfn "  - IsDynamic: %b" originalAssembly.IsDynamic
+                printfn "  - IsFullyTrusted: %b" originalAssembly.IsFullyTrusted
+                printfn "  - ReflectionOnly: %b" originalAssembly.ReflectionOnly
+                printfn "  - SecurityRuleSet: %A" originalAssembly.SecurityRuleSet
+                
+                // Check if the assembly has the DebuggableAttribute with DisableOptimizations
+                let debugAttribute = originalAssembly.GetCustomAttribute<DebuggableAttribute>()
+                printfn "[HotReloadTest] DebuggableAttribute: %A" debugAttribute
+                if debugAttribute <> null then
+                    printfn "  - IsJITTrackingEnabled: %b" debugAttribute.IsJITTrackingEnabled
+                    printfn "  - IsJITOptimizerDisabled: %b" debugAttribute.IsJITOptimizerDisabled
+                
+                // Check if metadata updates are supported
+                printfn "[HotReloadTest] MetadataUpdater.IsSupported: %b" MetadataUpdater.IsSupported
+                let modifiableAssemblies = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+                printfn "[HotReloadTest] DOTNET_MODIFIABLE_ASSEMBLIES: %s" (if modifiableAssemblies = null then "not set" else modifiableAssemblies)
+                
+                let simpleTestType = originalAssembly.GetType(typeName)
+                let getValueMethod = simpleTestType.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
                 let originalValue = getValueMethod.Invoke(null, [||]) :?> int
                 printfn "Original value: %d" originalValue
 
@@ -273,10 +290,23 @@ let getValue() = {0}
                         printfn "  - PDB delta first 16 bytes: %A" (if pdbBytes.Length >= 16 then pdbBytes |> Array.take 16 else pdbBytes)
                         
                         // Load the assembly in a custom context
-                        let alc = new AssemblyLoadContext("HotReloadTestContext", true)
-                        let assembly = alc.LoadFromAssemblyPath(originalDll)
+                        let assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(originalDll)
                         
                         try
+                            printfn "[HotReloadTest] Attempting to apply update..."
+                            printfn "  - Assembly: %s" assembly.FullName
+                            printfn "  - Assembly location: %s" assembly.Location
+                            printfn "  - IsCollectible: %b" assembly.IsCollectible
+                            printfn "  - IsDynamic: %b" assembly.IsDynamic
+                            printfn "  - IsFullyTrusted: %b" assembly.IsFullyTrusted
+                            printfn "  - ReflectionOnly: %b" assembly.ReflectionOnly
+                            printfn "  - SecurityRuleSet: %A" assembly.SecurityRuleSet
+                            printfn "  - Module version ID: %A" assembly.ManifestModule.ModuleVersionId
+                            
+                            printfn "  - Metadata delta size: %d" delta.MetadataDelta.Length
+                            printfn "  - IL delta size: %d" delta.ILDelta.Length
+                            printfn "  - PDB delta size: %d" delta.PdbDelta.Length
+                            
                             MetadataUpdater.ApplyUpdate(
                                 assembly,
                                 delta.MetadataDelta.AsSpan(),

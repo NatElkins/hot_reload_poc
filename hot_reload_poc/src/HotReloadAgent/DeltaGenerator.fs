@@ -78,68 +78,89 @@ module DeltaGenerator =
     /// <summary>
     /// Generates metadata delta for a method update.
     /// </summary>
-    let private generateMetadataDelta (methodToken: int) (methodName: string) (declaringTypeToken: int) =
-        printfn "[DeltaGenerator] Generating metadata delta for method %s (token: %d)" methodName methodToken
+    let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) =
+        printfn "[DeltaGenerator] Generating metadata delta for method getValue (token: %d)" methodToken
         printfn "[DeltaGenerator] Declaring type token: %d" declaringTypeToken
+        
         let metadataBuilder = MetadataBuilder()
-        
-        // Add TypeDef table entry
-        printfn "[DeltaGenerator] Adding TypeDef table entry..."
-        let typeDefHandle = metadataBuilder.AddTypeDefinition(
-            TypeAttributes.Public ||| TypeAttributes.Class,
-            metadataBuilder.GetOrAddString(""),  // namespace
-            metadataBuilder.GetOrAddString("DynamicType"),  // name
-            metadataBuilder.AddTypeReference(
-                metadataBuilder.AddAssemblyReference(
-                    metadataBuilder.GetOrAddString("System.Runtime"),  // name
-                    Version(9, 0, 0, 0),  // version
-                    metadataBuilder.GetOrAddString(""),  // culture
-                    metadataBuilder.GetOrAddBlob([|0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy|]),  // publicKeyOrToken
-                    enum<AssemblyFlags>(0),  // flags
-                    metadataBuilder.GetOrAddBlob([||])  // hashValue
-                ),
-                metadataBuilder.GetOrAddString("System"),
-                metadataBuilder.GetOrAddString("Object")
-            ),  // baseType
-            MetadataTokens.FieldDefinitionHandle(1),  // fieldList
-            MetadataTokens.MethodDefinitionHandle(1)  // methodList
-        )
-        printfn "[DeltaGenerator] Added TypeDef with handle: %A" typeDefHandle
-        
-        // Add MethodDef table entry
-        printfn "[DeltaGenerator] Adding MethodDef table entry..."
-        let methodDefHandle = metadataBuilder.AddMethodDefinition(
-            MethodAttributes.Public ||| MethodAttributes.Static,  // attributes
-            MethodImplAttributes.IL,  // implAttributes
-            metadataBuilder.GetOrAddString("DynamicMethod"),  // name
-            metadataBuilder.GetOrAddBlob(generateMethodSignature()),  // signature
-            0,  // bodyOffset
-            MetadataTokens.ParameterHandle(1)  // parameterList
-        )
-        printfn "[DeltaGenerator] Added MethodDef with handle: %A" methodDefHandle
+        let metadataBlob = BlobBuilder()
         
         // Add EncLog entry for method update
-        printfn "[DeltaGenerator] Adding EncLog entry..."
         metadataBuilder.AddEncLogEntry(
-            methodDefHandle,
+            MetadataTokens.MethodDefinitionHandle(methodToken),
             EditAndContinueOperation.Default)
-            
-        // Add EncMap entry
-        printfn "[DeltaGenerator] Adding EncMap entry..."
-        metadataBuilder.AddEncMapEntry(methodDefHandle)
         
-        // Create metadata root builder with generation
-        printfn "[DeltaGenerator] Creating metadata root builder..."
-        let rootBuilder = new MetadataRootBuilder(metadataBuilder)
+        // Add EncMap entry for method
+        metadataBuilder.AddEncMapEntry(MetadataTokens.MethodDefinitionHandle(methodToken))
+        
+        // Create metadata root builder
+        let rootBuilder = MetadataRootBuilder(metadataBuilder)
         
         // Serialize metadata
-        printfn "[DeltaGenerator] Serializing metadata..."
-        let metadataBlob = new BlobBuilder()
-        rootBuilder.Serialize(metadataBlob, 1, 0)  // Generation 1 for delta
-        let metadataBytes = metadataBlob.ToArray()
-        printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" metadataBytes.Length
-        printfn "[DeltaGenerator] Metadata bytes: %A" metadataBytes
-        ImmutableArray.CreateRange(metadataBytes)
+        let metadataBytes = BlobBuilder()
+        rootBuilder.Serialize(metadataBytes, 1, 0)  // Generation 1 for delta
+        let metadataContent = metadataBytes.ToArray()
+        
+        // Write metadata header
+        let bsjbBytes = [|0x42uy; 0x53uy; 0x4Auy; 0x42uy|]  // "BSJB"
+        metadataBlob.WriteBytes(bsjbBytes)
+        metadataBlob.WriteUInt16(1us)           // major version
+        metadataBlob.WriteUInt16(1us)           // minor version
+        metadataBlob.WriteUInt32(0u)            // reserved
+        
+        // Version string
+        let version = "v4.0.30319"
+        let versionLength = version.Length + 1   // +1 for null terminator
+        let paddedLength = ((versionLength + 3) / 4) * 4
+        metadataBlob.WriteInt32(paddedLength)
+        metadataBlob.WriteBytes(System.Text.Encoding.UTF8.GetBytes(version))
+        metadataBlob.WriteByte(0uy)  // null terminator
+        
+        // Pad to 4-byte boundary
+        for i = versionLength to paddedLength - 1 do
+            metadataBlob.WriteByte(0uy)
+            
+        // reserved
+        metadataBlob.WriteUInt16(0us)
+        
+        // number of streams (5 + 1 for EnC)
+        metadataBlob.WriteUInt16(6us)
+        
+        // Calculate stream offsets
+        let streamNames = [|
+            [|0x23uy; 0x2Duy; 0x00uy|];  // "#-\0"
+            [|0x23uy; 0x53uy; 0x74uy; 0x72uy; 0x69uy; 0x6Euy; 0x67uy; 0x73uy; 0x00uy|];  // "#Strings\0"
+            [|0x23uy; 0x55uy; 0x53uy; 0x00uy|];  // "#US\0"
+            [|0x23uy; 0x47uy; 0x55uy; 0x49uy; 0x44uy; 0x00uy|];  // "#GUID\0"
+            [|0x23uy; 0x42uy; 0x6Cuy; 0x6Fuy; 0x62uy; 0x00uy|];  // "#Blob\0"
+            [|0x23uy; 0x7Euy; 0x00uy|]  // "#~\0"
+        |]
+        
+        let streamHeaderSize = streamNames |> Array.sumBy (fun name -> name.Length + 8)  // 8 bytes for size and offset
+        let streamOffset = metadataBlob.Count + streamHeaderSize
+        
+        // Write stream headers
+        let mutable currentOffset = streamOffset
+        
+        // Write metadata stream header
+        metadataBlob.WriteBytes(streamNames.[0])  // "#-"
+        metadataBlob.WriteInt32(metadataContent.Length)
+        metadataBlob.WriteInt32(currentOffset)
+        currentOffset <- currentOffset + metadataContent.Length
+        
+        // Write empty stream headers
+        for i = 1 to 5 do
+            metadataBlob.WriteBytes(streamNames.[i])
+            metadataBlob.WriteInt32(0)  // Empty stream
+            metadataBlob.WriteInt32(currentOffset)
+        
+        // Write metadata bytes
+        metadataBlob.WriteBytes(metadataContent)
+        
+        let deltaBytes = metadataBlob.ToArray()
+        printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" deltaBytes.Length
+        printfn "[DeltaGenerator] Metadata bytes: %A" deltaBytes
+        ImmutableArray.CreateRange(deltaBytes)
 
     /// <summary>
     /// Generates IL delta for a method update.
@@ -223,19 +244,17 @@ module DeltaGenerator =
                 return None
             | method' ->
                 let methodToken = method'.MetadataToken
-                let methodName = method'.Name
                 let declaringTypeToken = method'.DeclaringType.MetadataToken
                 
                 printfn "[DeltaGenerator] Found method info:"
                 printfn "  - Token: %d" methodToken
-                printfn "  - Name: %s" methodName
                 printfn "  - Declaring type token: %d" declaringTypeToken
                 printfn "  - Method attributes: %A" method'.Attributes
                 printfn "  - Method implementation attributes: %A" method'.MethodImplementationFlags
                 
                 // Generate minimal metadata and IL deltas
                 printfn "[DeltaGenerator] Generating metadata delta..."
-                let metadataDelta = generateMetadataDelta methodToken methodName declaringTypeToken
+                let metadataDelta = generateMetadataDelta methodToken declaringTypeToken
                 printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
                 printfn "[DeltaGenerator] Generating IL delta..."

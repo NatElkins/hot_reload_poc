@@ -67,7 +67,7 @@ let getValue() = {0}
 
             // Compile to disk
             let outputPath = Path.Combine(Path.GetTempPath(), "TestAssembly.dll")
-            let! compileResult, exitCode =
+            let! compileResult, optExn =
                 checker.Compile(
                     [| "fsc.exe"
                        $"--out:{outputPath}"
@@ -75,8 +75,7 @@ let getValue() = {0}
                        yield! projectOptions.SourceFiles |]
                 )
 
-            match exitCode with
-            | None ->
+            if optExn = None then
                 // Load the compiled assembly
                 let assembly = Assembly.LoadFrom(outputPath)
                 
@@ -106,7 +105,7 @@ let getValue() = {0}
                 | None ->
                     printfn "[InMemoryCompiler] Could not find method token"
                     return None
-            | Some _ ->
+            else
                 printfn "[InMemoryCompiler] Compilation failed with errors: %A" compileResult
                 return None
         } 

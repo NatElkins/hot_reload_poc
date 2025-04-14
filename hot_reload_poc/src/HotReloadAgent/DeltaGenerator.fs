@@ -78,12 +78,26 @@ module DeltaGenerator =
     /// <summary>
     /// Generates metadata delta for a method update.
     /// </summary>
-    let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) =
+    let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
         printfn "[DeltaGenerator] Generating metadata delta for method getValue (token: %d)" methodToken
         printfn "[DeltaGenerator] Declaring type token: %d" declaringTypeToken
+        printfn "[DeltaGenerator] Using module ID: %A" moduleId
         
+        // Use the MetadataBuilder for correct metadata construction
         let metadataBuilder = MetadataBuilder()
-        let metadataBlob = BlobBuilder()
+        
+        // The Module table must be present in all metadata blobs (including deltas)
+        // Add a row to the Module table with the correct module ID
+        let _ = metadataBuilder.AddModule(
+            0, // Generation 0 for the baseline module
+            metadataBuilder.GetOrAddString("original.dll"), // Name
+            metadataBuilder.GetOrAddGuid(moduleId), // Use the actual Mvid from the original assembly
+            metadataBuilder.GetOrAddGuid(Guid.Empty), // EncId - can be empty for deltas
+            metadataBuilder.GetOrAddGuid(Guid.Empty)  // EncBaseId - can be empty for deltas
+        )
+        
+        // Add the declaring type to ENCMap as well to ensure proper resolution
+        metadataBuilder.AddEncMapEntry(MetadataTokens.TypeDefinitionHandle(declaringTypeToken))
         
         // Add EncLog entry for method update
         metadataBuilder.AddEncLogEntry(
@@ -93,99 +107,83 @@ module DeltaGenerator =
         // Add EncMap entry for method
         metadataBuilder.AddEncMapEntry(MetadataTokens.MethodDefinitionHandle(methodToken))
         
-        // Create metadata root builder
+        // Create and serialize the metadata using MetadataRootBuilder
+        let metadataBytes = BlobBuilder()
         let rootBuilder = MetadataRootBuilder(metadataBuilder)
         
-        // Serialize metadata
-        let metadataBytes = BlobBuilder()
-        rootBuilder.Serialize(metadataBytes, 1, 0)  // Generation 1 for delta
-        let metadataContent = metadataBytes.ToArray()
+        // Serialize with the correct generation (1) for deltas
+        rootBuilder.Serialize(metadataBytes, 1, 0)
         
-        // Write metadata header
-        let bsjbBytes = [|0x42uy; 0x53uy; 0x4Auy; 0x42uy|]  // "BSJB"
-        metadataBlob.WriteBytes(bsjbBytes)
-        metadataBlob.WriteUInt16(1us)           // major version
-        metadataBlob.WriteUInt16(1us)           // minor version
-        metadataBlob.WriteUInt32(0u)            // reserved
-        
-        // Version string
-        let version = "v4.0.30319"
-        let versionLength = version.Length + 1   // +1 for null terminator
-        let paddedLength = ((versionLength + 3) / 4) * 4
-        metadataBlob.WriteInt32(paddedLength)
-        metadataBlob.WriteBytes(System.Text.Encoding.UTF8.GetBytes(version))
-        metadataBlob.WriteByte(0uy)  // null terminator
-        
-        // Pad to 4-byte boundary
-        for i = versionLength to paddedLength - 1 do
-            metadataBlob.WriteByte(0uy)
-            
-        // reserved
-        metadataBlob.WriteUInt16(0us)
-        
-        // number of streams (5 + 1 for EnC)
-        metadataBlob.WriteUInt16(6us)
-        
-        // Calculate stream offsets
-        let streamNames = [|
-            [|0x23uy; 0x2Duy; 0x00uy|];  // "#-\0"
-            [|0x23uy; 0x53uy; 0x74uy; 0x72uy; 0x69uy; 0x6Euy; 0x67uy; 0x73uy; 0x00uy|];  // "#Strings\0"
-            [|0x23uy; 0x55uy; 0x53uy; 0x00uy|];  // "#US\0"
-            [|0x23uy; 0x47uy; 0x55uy; 0x49uy; 0x44uy; 0x00uy|];  // "#GUID\0"
-            [|0x23uy; 0x42uy; 0x6Cuy; 0x6Fuy; 0x62uy; 0x00uy|];  // "#Blob\0"
-            [|0x23uy; 0x7Euy; 0x00uy|]  // "#~\0"
-        |]
-        
-        let streamHeaderSize = streamNames |> Array.sumBy (fun name -> name.Length + 8)  // 8 bytes for size and offset
-        let streamOffset = metadataBlob.Count + streamHeaderSize
-        
-        // Write stream headers
-        let mutable currentOffset = streamOffset
-        
-        // Write metadata stream header
-        metadataBlob.WriteBytes(streamNames.[0])  // "#-"
-        metadataBlob.WriteInt32(metadataContent.Length)
-        metadataBlob.WriteInt32(currentOffset)
-        currentOffset <- currentOffset + metadataContent.Length
-        
-        // Write empty stream headers
-        for i = 1 to 5 do
-            metadataBlob.WriteBytes(streamNames.[i])
-            metadataBlob.WriteInt32(0)  // Empty stream
-            metadataBlob.WriteInt32(currentOffset)
-        
-        // Write metadata bytes
-        metadataBlob.WriteBytes(metadataContent)
-        
-        let deltaBytes = metadataBlob.ToArray()
+        // Convert to immutable array and return
+        let deltaBytes = metadataBytes.ToArray()
         printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" deltaBytes.Length
-        printfn "[DeltaGenerator] Metadata bytes: %A" deltaBytes
+        printfn "[DeltaGenerator] Metadata bytes first 16 bytes: %A" 
+            (if deltaBytes.Length >= 16 then deltaBytes |> Array.take 16 else deltaBytes)
         ImmutableArray.CreateRange(deltaBytes)
 
     /// <summary>
     /// Generates IL delta for a method update.
     /// </summary>
     let private generateILDelta (returnValue: int) =
-        printfn "[DeltaGenerator] Generating IL delta for return value: %d" returnValue
+        printfn "[DeltaGenerator] Generating IL delta..."
         let ilBuilder = new BlobBuilder()
         
-        // Method header (tiny format)
-        printfn "[DeltaGenerator] Writing method header..."
-        ilBuilder.WriteByte(0x02uy)  // Tiny format, size follows
-        ilBuilder.WriteByte(0x03uy)  // Method size = 3 bytes
-        
-        // Method body
-        printfn "[DeltaGenerator] Writing IL instructions:"
-        printfn "  ldc.i4.s %d" returnValue
-        ilBuilder.WriteByte(0x16uy)  // ldc.i4.s
-        ilBuilder.WriteByte(byte returnValue)
-        
-        printfn "  ret"
-        ilBuilder.WriteByte(0x2Auy)  // ret
+        // Calculate method body size correctly - the actual IL instructions
+        // For the modified method that returns a constant, we'll have:
+        // 1. Load constant instruction (1-5 bytes depending on value)
+        // 2. Return instruction (1 byte)
+        let ilCode, ilCodeSize = 
+            match returnValue with
+            | n when n >= 0 && n <= 8 ->
+                // ldc.i4.0 through ldc.i4.8 (1 byte opcode)
+                let opcode = 0x16 + n
+                [| byte opcode; 0x2Auy |], 2 // instruction + ret
+            | n when n >= -128 && n <= 127 ->
+                // ldc.i4.s + sbyte value + ret
+                [| 0x1Fuy; byte n; 0x2Auy |], 3
+            | _ ->
+                // ldc.i4 + int32 value + ret
+                let valueBytes = BitConverter.GetBytes(returnValue)
+                Array.concat [| [| 0x20uy |]; valueBytes; [| 0x2Auy |] |], 6
+
+        // Method header (Tiny format - suitable for small methods without local variables)
+        // For tiny format:
+        // - First byte: (codeSize << 2) | 0x2
+        // - codeSize must be < 64
+        if ilCodeSize < 64 then
+            // Tiny format header (1 byte)
+            let tinyHeader = byte ((ilCodeSize <<< 2) ||| 0x2)
+            ilBuilder.WriteByte(tinyHeader)
+            
+            // Write the IL code
+            ilBuilder.WriteBytes(ilCode)
+        else
+            // If code size > 63 bytes, we'd need fat format
+            // But this simple example should never reach this case
+            printfn "[DeltaGenerator] Warning: Method body too large for tiny format, using fat format..."
+            
+            // Fat format header (12 bytes total)
+            // First 2 bytes: flags and size
+            // 0x3 = Fat format
+            // 0x30 = More sections follow
+            ilBuilder.WriteByte(0x03uy) // Fat format
+            ilBuilder.WriteByte(0x30uy) // Header size in 4-byte chunks (3 chunks = 12 bytes)
+            
+            // MaxStack (2 bytes) - just use 8
+            ilBuilder.WriteUInt16(8us)
+            
+            // CodeSize (4 bytes)
+            ilBuilder.WriteUInt32(uint32 ilCodeSize)
+            
+            // LocalVarSigTok (4 bytes) - no locals, so 0
+            ilBuilder.WriteUInt32(0u)
+            
+            // Write the IL code
+            ilBuilder.WriteBytes(ilCode)
         
         let ilBytes = ilBuilder.ToArray()
-        printfn "[DeltaGenerator] Generated IL bytes: %d bytes" ilBytes.Length
-        printfn "[DeltaGenerator] IL bytes: %A" ilBytes
+        printfn "[DeltaGenerator] Generated IL delta: %d bytes" ilBytes.Length
+        printfn "[DeltaGenerator] IL delta bytes: %A" ilBytes
         ImmutableArray.CreateRange(ilBytes)
 
     /// <summary>
@@ -193,27 +191,47 @@ module DeltaGenerator =
     /// </summary>
     let private generatePDBDelta (methodToken: int) =
         printfn "[DeltaGenerator] Generating PDB delta for method token: %d" methodToken
+        
+        // For simple EnC scenarios with method body updates,
+        // an empty PDB delta with the correct header is often sufficient
+        // because no actual debugging information changes
         let pdbBuilder = new BlobBuilder()
         
-        // Document table
-        printfn "[DeltaGenerator] Writing document table..."
-        pdbBuilder.WriteByte(0x01uy)  // 1 document
-        pdbBuilder.WriteCompressedInteger(1)  // Document name index
+        // Standard Portable PDB header with "BSJB" signature
+        pdbBuilder.WriteBytes([|
+            // Magic bytes for Portable PDB ("BSJB")
+            0x42uy; 0x53uy; 0x4Auy; 0x42uy;
+            
+            // Major/Minor version (1.1) - same as in metadata
+            0x01uy; 0x00uy; 
+            0x01uy; 0x00uy;
+            
+            // Reserved (4 bytes of zeros)
+            0x00uy; 0x00uy; 0x00uy; 0x00uy;
+        |])
         
-        // Method debug info
-        printfn "[DeltaGenerator] Writing method debug info..."
-        pdbBuilder.WriteCompressedInteger(methodToken)  // Method token
-        pdbBuilder.WriteByte(0x01uy)  // 1 sequence point
+        // Version string length and string - using a minimal "v4.0.30319" version string
+        let versionString = "v4.0.30319"
+        let versionStringBytes = System.Text.Encoding.UTF8.GetBytes(versionString + "\0")
+        let paddedLength = (versionStringBytes.Length + 3) / 4 * 4 // round up to nearest multiple of 4
         
-        // Sequence point
-        printfn "[DeltaGenerator] Writing sequence point..."
-        pdbBuilder.WriteCompressedInteger(0)  // IL offset
-        pdbBuilder.WriteCompressedInteger(1)  // Source line
-        pdbBuilder.WriteCompressedInteger(1)  // Source column
+        pdbBuilder.WriteInt32(versionStringBytes.Length)
+        pdbBuilder.WriteBytes(versionStringBytes)
+        
+        // Add padding to align to 4 bytes if needed
+        let padding = paddedLength - versionStringBytes.Length
+        if padding > 0 then
+            pdbBuilder.WriteBytes(Array.zeroCreate padding)
+        
+        // Flags (2 bytes) and stream count (2 bytes) - using 0 for flags and 0 streams
+        // This creates a minimal valid PDB without any actual debug info
+        pdbBuilder.WriteInt16(0s)   // Flags
+        pdbBuilder.WriteInt16(0s)   // StreamCount
         
         let pdbBytes = pdbBuilder.ToArray()
-        printfn "[DeltaGenerator] Generated PDB bytes: %d bytes" pdbBytes.Length
-        printfn "[DeltaGenerator] PDB bytes: %A" pdbBytes
+        printfn "[DeltaGenerator] Generated PDB delta: %d bytes" pdbBytes.Length
+        printfn "[DeltaGenerator] PDB delta bytes: %A" 
+            (if pdbBytes.Length >= 16 then pdbBytes |> Array.take 16 else pdbBytes)
         ImmutableArray.CreateRange(pdbBytes)
 
     /// <summary>
@@ -254,7 +272,9 @@ module DeltaGenerator =
                 
                 // Generate minimal metadata and IL deltas
                 printfn "[DeltaGenerator] Generating metadata delta..."
-                let metadataDelta = generateMetadataDelta methodToken declaringTypeToken
+                // Ensure we're using the same ModuleId as the original assembly
+                let moduleId = assembly.ManifestModule.ModuleVersionId
+                let metadataDelta = generateMetadataDelta methodToken declaringTypeToken moduleId
                 printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
                 printfn "[DeltaGenerator] Generating IL delta..."
@@ -265,18 +285,15 @@ module DeltaGenerator =
                 let pdbDelta = generatePDBDelta methodToken
                 printfn "[DeltaGenerator] PDB delta size: %d bytes" pdbDelta.Length
                 
-                let updatedTypes = ImmutableArray<int>.Empty
+                // Create the complete delta
                 let updatedMethods = ImmutableArray.Create<int>(methodToken)
-                
-                // Ensure we're using the same ModuleId as the original assembly
-                let moduleId = assembly.ManifestModule.ModuleVersionId
-                printfn "[DeltaGenerator] Using module ID: %A" moduleId
                 
                 // Verify the deltas
                 printfn "[DeltaGenerator] Verifying deltas..."
                 printfn "  - Metadata delta first 16 bytes: %A" (metadataDelta.AsSpan().Slice(0, min 16 metadataDelta.Length).ToArray())
                 printfn "  - IL delta first 16 bytes: %A" (ilDelta.AsSpan().Slice(0, min 16 ilDelta.Length).ToArray())
                 printfn "  - PDB delta first 16 bytes: %A" (pdbDelta.AsSpan().Slice(0, min 16 pdbDelta.Length).ToArray())
+                let updatedTypes = ImmutableArray<int>.Empty
                 
                 printfn "[DeltaGenerator] Generated delta:"
                 printfn "  - Metadata: %d bytes" metadataDelta.Length
@@ -291,7 +308,7 @@ module DeltaGenerator =
                     MetadataDelta = metadataDelta
                     ILDelta = ilDelta
                     PdbDelta = pdbDelta
-                    UpdatedTypes = updatedTypes
                     UpdatedMethods = updatedMethods
+                    UpdatedTypes = updatedTypes
                 }
         } 

@@ -5,7 +5,7 @@ open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Text
 open System.IO
 open System.Collections.Immutable
-
+#nowarn FS3261
 module DeltaVerification =
     let compileFile (source: string) (outputPath: string) =
         let checker = FSharpChecker.Create()

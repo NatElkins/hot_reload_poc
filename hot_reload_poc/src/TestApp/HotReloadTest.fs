@@ -253,6 +253,106 @@ let getValue() = {0}
                         // Also keep the .md extension for direct inspection if needed
                         File.WriteAllBytes(Path.Combine(deltaDir, "1.md"), metadataBytes)
                         File.WriteAllBytes(Path.Combine(deltaDir, "1.pdb"), pdbBytes)
+
+                        // Run mdv and ilspycmd on the delta files
+                        let runAnalysisTools () =
+                            // Run mdv with detailed output
+                            let mdvProcess = new Process()
+                            mdvProcess.StartInfo.FileName <- "/Users/nat/.dotnet/tools/mdv"
+                            mdvProcess.StartInfo.Arguments <- $"/g:1.meta;1.il 0.dll /il+ /md+ /stats+ /assemblyRefs+"
+                            mdvProcess.StartInfo.UseShellExecute <- false
+                            mdvProcess.StartInfo.RedirectStandardOutput <- true
+                            mdvProcess.StartInfo.RedirectStandardError <- true
+                            mdvProcess.StartInfo.WorkingDirectory <- deltaDir
+                            
+                            printfn "[HotReloadTest] Running mdv analysis..."
+                            mdvProcess.Start() |> ignore
+                            let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
+                            let mdvError = mdvProcess.StandardError.ReadToEnd()
+                            mdvProcess.WaitForExit()
+                            
+                            if mdvProcess.ExitCode <> 0 then
+                                printfn "[HotReloadTest] mdv failed with exit code %d" mdvProcess.ExitCode
+                                printfn "Standard Error: %s" mdvError
+                            else
+                                printfn "[HotReloadTest] mdv output:\n%s" mdvOutput
+                            
+                            // Run ilspycmd on both versions
+                            let ilspyProcess = new Process()
+                            ilspyProcess.StartInfo.FileName <- "/Users/nat/.dotnet/tools/ilspycmd"
+                            ilspyProcess.StartInfo.Arguments <- "0.dll"
+                            ilspyProcess.StartInfo.UseShellExecute <- false
+                            ilspyProcess.StartInfo.RedirectStandardOutput <- true
+                            ilspyProcess.StartInfo.RedirectStandardError <- true
+                            ilspyProcess.StartInfo.WorkingDirectory <- deltaDir
+                            
+                            printfn "[HotReloadTest] Running ilspycmd on original version..."
+                            ilspyProcess.Start() |> ignore
+                            let ilspyOutput = ilspyProcess.StandardOutput.ReadToEnd()
+                            let ilspyError = ilspyProcess.StandardError.ReadToEnd()
+                            ilspyProcess.WaitForExit()
+                            
+                            if ilspyProcess.ExitCode <> 0 then
+                                printfn "[HotReloadTest] ilspycmd failed with exit code %d" ilspyProcess.ExitCode
+                                printfn "Standard Error: %s" ilspyError
+                            else
+                                printfn "[HotReloadTest] ilspycmd output:\n%s" ilspyOutput
+                        
+                        // Run the analysis tools
+                        runAnalysisTools()
+                        
+                        // Analyze the IL delta in more detail
+                        printfn "[HotReloadTest] Detailed IL delta analysis:"
+                        printfn "  Hex dump of IL delta bytes: %s" (BitConverter.ToString(ilBytes))
+                        
+                        // Parse and display the IL delta in a human-readable form
+                        if ilBytes.Length > 0 then
+                            let tinyFormat = (ilBytes[0] &&& 0x03uy) = 0x02uy
+                            if tinyFormat then
+                                let codeSize = int (ilBytes[0] >>> 2)
+                                printfn "  IL format: Tiny (1-byte header)"
+                                printfn "  Code size from header: %d bytes" codeSize
+                                printfn "  Header byte: 0x%02X" ilBytes[0]
+                                
+                                // Display the actual IL instructions
+                                printfn "  IL Instructions:"
+                                let mutable i = 1 // Skip header
+                                while i < ilBytes.Length do
+                                    match ilBytes[i] with
+                                    | 0x16uy -> printfn "    IL_%04X: ldc.i4.0" (i-1)
+                                    | 0x17uy -> printfn "    IL_%04X: ldc.i4.1" (i-1)
+                                    | 0x18uy -> printfn "    IL_%04X: ldc.i4.2" (i-1)
+                                    | 0x19uy -> printfn "    IL_%04X: ldc.i4.3" (i-1)
+                                    | 0x1Auy -> printfn "    IL_%04X: ldc.i4.4" (i-1)
+                                    | 0x1Buy -> printfn "    IL_%04X: ldc.i4.5" (i-1)
+                                    | 0x1Cuy -> printfn "    IL_%04X: ldc.i4.6" (i-1)
+                                    | 0x1Duy -> printfn "    IL_%04X: ldc.i4.7" (i-1)
+                                    | 0x1Euy -> printfn "    IL_%04X: ldc.i4.8" (i-1)
+                                    | 0x1Fuy -> 
+                                        if i+1 < ilBytes.Length then
+                                            printfn "    IL_%04X: ldc.i4.s %d" (i-1) (sbyte ilBytes[i+1])
+                                            i <- i + 1
+                                        else
+                                            printfn "    IL_%04X: ldc.i4.s <incomplete>" (i-1)
+                                    | 0x20uy -> 
+                                        if i+4 < ilBytes.Length then
+                                            let value = 
+                                                ilBytes[i+1] ||| 
+                                                (ilBytes[i+2] <<< 8) ||| 
+                                                (ilBytes[i+3] <<< 16) ||| 
+                                                (ilBytes[i+4] <<< 24)
+                                            printfn "    IL_%04X: ldc.i4 %d" (i-1) value
+                                            i <- i + 4
+                                        else
+                                            printfn "    IL_%04X: ldc.i4 <incomplete>" (i-1)
+                                    | 0x2Auy -> printfn "    IL_%04X: ret" (i-1)
+                                    | opcode -> printfn "    IL_%04X: Unknown opcode 0x%02X" (i-1) opcode
+                                    
+                                    i <- i + 1
+                            else
+                                printfn "  IL format: Not tiny format (first byte: 0x%02X)" ilBytes[0]
+                        else
+                            printfn "  IL delta is empty"
                         
                         printfn "[HotReloadTest] Delta files written to: %s" deltaDir
                         printfn "[HotReloadTest] To analyze with mdv, run: cd \"%s\" && mdv 0.dll" deltaDir
@@ -269,9 +369,25 @@ let getValue() = {0}
                             printfn "  - SecurityRuleSet: %A" originalAssembly.SecurityRuleSet
                             printfn "  - Module version ID: %A" originalAssembly.ManifestModule.ModuleVersionId
                             
+                            // Validate the deltas before applying
+                            printfn "[HotReloadTest] Validating deltas before applying..."
                             printfn "  - Metadata delta size: %d" delta.MetadataDelta.Length
                             printfn "  - IL delta size: %d" delta.ILDelta.Length
                             printfn "  - PDB delta size: %d" delta.PdbDelta.Length
+                            
+                            // Check if metadata updates are supported
+                            printfn "[HotReloadTest] Checking metadata update support..."
+                            printfn "  - MetadataUpdater.IsSupported: %b" MetadataUpdater.IsSupported
+                            let modifiableAssemblies = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+                            printfn "  - DOTNET_MODIFIABLE_ASSEMBLIES: %s" (if modifiableAssemblies = null then "not set" else modifiableAssemblies)
+                            
+                            // Ensure the environment is configured for EnC
+                            if not MetadataUpdater.IsSupported then
+                                printfn "[HotReloadTest] Error: Metadata updates are not supported in this environment"
+                                return ()
+                            
+                            if modifiableAssemblies = null then
+                                printfn "[HotReloadTest] Warning: DOTNET_MODIFIABLE_ASSEMBLIES is not set. This may prevent updates from working."
                             
                             // Apply the update
                             MetadataUpdater.ApplyUpdate(

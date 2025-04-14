@@ -89,23 +89,43 @@ module DeltaGenerator =
         // The Module table must be present in all metadata blobs (including deltas)
         // Add a row to the Module table with the correct module ID
         let _ = metadataBuilder.AddModule(
-            0, // Generation 0 for the baseline module
-            metadataBuilder.GetOrAddString("original.dll"), // Name
+            1, // Generation 1 for deltas
+            metadataBuilder.GetOrAddString("original.dll"), // Use the actual module name
             metadataBuilder.GetOrAddGuid(moduleId), // Use the actual Mvid from the original assembly
             metadataBuilder.GetOrAddGuid(Guid.Empty), // EncId - can be empty for deltas
             metadataBuilder.GetOrAddGuid(Guid.Empty)  // EncBaseId - can be empty for deltas
         )
         
-        // Add the declaring type to ENCMap as well to ensure proper resolution
-        metadataBuilder.AddEncMapEntry(MetadataTokens.TypeDefinitionHandle(declaringTypeToken))
+        // Add the type to TypeDef table
+        let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
+        metadataBuilder.AddTypeDefinition(
+            TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.BeforeFieldInit,
+            metadataBuilder.GetOrAddString("SimpleTest"),
+            metadataBuilder.GetOrAddString("TestApp"),
+            MetadataTokens.TypeReferenceHandle(0x01000001), // System.Object
+            MetadataTokens.FieldDefinitionHandle(0x04000001),
+            MetadataTokens.MethodDefinitionHandle(0x06000001)
+        ) |> ignore
+        
+        // Add the method to MethodDef table
+        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
+        metadataBuilder.AddMethodDefinition(
+            MethodAttributes.Public ||| MethodAttributes.Static ||| MethodAttributes.HideBySig,
+            MethodImplAttributes.IL,
+            metadataBuilder.GetOrAddString("getValue"),
+            metadataBuilder.GetOrAddBlob(generateMethodSignature()),
+            0, // RVA - will be filled in by the runtime
+            MetadataTokens.ParameterHandle(0x08000001)  // ParameterList - will be filled in by the runtime
+        ) |> ignore
+        
+        // Add both the type and method to ENCMap
+        metadataBuilder.AddEncMapEntry(typeDefHandle)
+        metadataBuilder.AddEncMapEntry(methodDefHandle)
         
         // Add EncLog entry for method update
         metadataBuilder.AddEncLogEntry(
-            MetadataTokens.MethodDefinitionHandle(methodToken),
+            methodDefHandle,
             EditAndContinueOperation.Default)
-        
-        // Add EncMap entry for method
-        metadataBuilder.AddEncMapEntry(MetadataTokens.MethodDefinitionHandle(methodToken))
         
         // Create and serialize the metadata using MetadataRootBuilder
         let metadataBytes = BlobBuilder()
@@ -128,58 +148,10 @@ module DeltaGenerator =
         printfn "[DeltaGenerator] Generating IL delta..."
         let ilBuilder = new BlobBuilder()
         
-        // Calculate method body size correctly - the actual IL instructions
-        // For the modified method that returns a constant, we'll have:
-        // 1. Load constant instruction (1-5 bytes depending on value)
-        // 2. Return instruction (1 byte)
-        let ilCode, ilCodeSize = 
-            match returnValue with
-            | n when n >= 0 && n <= 8 ->
-                // ldc.i4.0 through ldc.i4.8 (1 byte opcode)
-                let opcode = 0x16 + n
-                [| byte opcode; 0x2Auy |], 2 // instruction + ret
-            | n when n >= -128 && n <= 127 ->
-                // ldc.i4.s + sbyte value + ret
-                [| 0x1Fuy; byte n; 0x2Auy |], 3
-            | _ ->
-                // ldc.i4 + int32 value + ret
-                let valueBytes = BitConverter.GetBytes(returnValue)
-                Array.concat [| [| 0x20uy |]; valueBytes; [| 0x2Auy |] |], 6
-
-        // Method header (Tiny format - suitable for small methods without local variables)
-        // For tiny format:
-        // - First byte: (codeSize << 2) | 0x2
-        // - codeSize must be < 64
-        if ilCodeSize < 64 then
-            // Tiny format header (1 byte)
-            let tinyHeader = byte ((ilCodeSize <<< 2) ||| 0x2)
-            ilBuilder.WriteByte(tinyHeader)
-            
-            // Write the IL code
-            ilBuilder.WriteBytes(ilCode)
-        else
-            // If code size > 63 bytes, we'd need fat format
-            // But this simple example should never reach this case
-            printfn "[DeltaGenerator] Warning: Method body too large for tiny format, using fat format..."
-            
-            // Fat format header (12 bytes total)
-            // First 2 bytes: flags and size
-            // 0x3 = Fat format
-            // 0x30 = More sections follow
-            ilBuilder.WriteByte(0x03uy) // Fat format
-            ilBuilder.WriteByte(0x30uy) // Header size in 4-byte chunks (3 chunks = 12 bytes)
-            
-            // MaxStack (2 bytes) - just use 8
-            ilBuilder.WriteUInt16(8us)
-            
-            // CodeSize (4 bytes)
-            ilBuilder.WriteUInt32(uint32 ilCodeSize)
-            
-            // LocalVarSigTok (4 bytes) - no locals, so 0
-            ilBuilder.WriteUInt32(0u)
-            
-            // Write the IL code
-            ilBuilder.WriteBytes(ilCode)
+        // For EnC updates, we only need the raw IL instructions
+        // No header is needed as we're only updating the method body
+        let ilCode = [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
+        ilBuilder.WriteBytes(ilCode)
         
         let ilBytes = ilBuilder.ToArray()
         printfn "[DeltaGenerator] Generated IL delta: %d bytes" ilBytes.Length

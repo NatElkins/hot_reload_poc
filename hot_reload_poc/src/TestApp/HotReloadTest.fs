@@ -18,9 +18,7 @@ open System.Runtime.CompilerServices
 module HotReloadTest =
     /// Create a stable location for delta files
     let deltaDir = 
-        let dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "HotReloadTest")
-        Directory.CreateDirectory(dir) |> ignore
-        dir
+        Environment.CurrentDirectory
 
     /// Template for our test module
     let testModuleTemplate = """
@@ -178,12 +176,80 @@ let getValue() = {0}
                 printfn "  - ReflectionOnly: %b" originalAssembly.ReflectionOnly
                 printfn "  - SecurityRuleSet: %A" originalAssembly.SecurityRuleSet
                 
-                // Check if the assembly has the DebuggableAttribute with DisableOptimizations
+                // Also check if the assembly has the DebuggableAttribute with DisableOptimizations
                 let debugAttribute = originalAssembly.GetCustomAttribute<DebuggableAttribute>()
                 printfn "[HotReloadTest] DebuggableAttribute: %A" debugAttribute
                 if debugAttribute <> null then
                     printfn "  - IsJITTrackingEnabled: %b" debugAttribute.IsJITTrackingEnabled
                     printfn "  - IsJITOptimizerDisabled: %b" debugAttribute.IsJITOptimizerDisabled
+                
+                // Exhaustively search for all methods that might be related to the getValue method
+                let findRelatedMethods (assembly: Assembly) (methodName: string) =
+                    printfn "[HotReloadTest] Searching for methods related to: %s" methodName
+                    let relatedMethods =
+                        assembly.GetTypes()
+                        |> Array.collect (fun t ->
+                            let methods = 
+                                t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance)
+                                |> Array.filter (fun m ->
+                                    m.Name.Contains(methodName) || 
+                                    (t.FullName.Contains("InvokeStub") && m.Name.Contains("get_")) ||
+                                    t.Name.Contains("InvokeStub"))
+                            
+                            // Print all found methods for visibility
+                            for m in methods do
+                                printfn "  - Found related method: %s::%s (Token: 0x%08X)" t.FullName m.Name m.MetadataToken
+                                
+                                // Dump IL bytes if available
+                                let body = m.GetMethodBody()
+                                if body <> null then
+                                    let ilBytes = body.GetILAsByteArray()
+                                    if ilBytes <> null && ilBytes.Length > 0 then
+                                        printfn "    - IL bytes: %A" ilBytes
+                                        printfn "    - IL hex: %s" (BitConverter.ToString(ilBytes))
+                            
+                            methods)
+                    relatedMethods
+                    
+                // Find all related methods
+                let relatedMethods = findRelatedMethods originalAssembly "getValue"
+                printfn "[HotReloadTest] Found %d related methods" relatedMethods.Length
+                
+                // Get the original getValue method
+                let simpleTestType = originalAssembly.GetType(typeName)
+                let getValueMethod = simpleTestType.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
+                
+                // Try to find an InvokeStub method to use instead of the regular method
+                let invokeStubMethod = 
+                    relatedMethods 
+                    |> Array.tryFind (fun m -> 
+                        m.DeclaringType.FullName.Contains("InvokeStub") || 
+                        m.DeclaringType.Name.Contains("InvokeStub"))
+                
+                // Get the final method to use
+                let finalMethod, isInvokeStub = 
+                    match invokeStubMethod with
+                    | Some m -> 
+                        printfn "[HotReloadTest] Found InvokeStub method to use: %s::%s (Token: 0x%08X)" 
+                            m.DeclaringType.FullName m.Name m.MetadataToken
+                        m, true
+                    | None -> 
+                        printfn "[HotReloadTest] No InvokeStub method found, using regular method: %s::%s (Token: 0x%08X)" 
+                            getValueMethod.DeclaringType.FullName getValueMethod.Name getValueMethod.MetadataToken
+                        getValueMethod, false
+                
+                // Detailed inspection of the method and type
+                printfn "[HotReloadTest] Detailed method and type inspection before update:"
+                printfn "  - Type full name: %s" simpleTestType.FullName
+                printfn "  - Type namespace: %s" (if String.IsNullOrEmpty(simpleTestType.Namespace) then "<empty>" else simpleTestType.Namespace)
+                printfn "  - Type attributes: %A" simpleTestType.Attributes
+                printfn "  - Type token: 0x%08X" simpleTestType.MetadataToken
+                
+                // Method details
+                printfn "  - Method name: %s" finalMethod.Name
+                printfn "  - Method attributes: %A" finalMethod.Attributes
+                printfn "  - Method impl flags: %A" finalMethod.MethodImplementationFlags
+                printfn "  - Method token: 0x%08X" finalMethod.MetadataToken
                 
                 // Check if metadata updates are supported
                 printfn "[HotReloadTest] MetadataUpdater.IsSupported: %b" MetadataUpdater.IsSupported
@@ -193,9 +259,66 @@ let getValue() = {0}
                 // Record the module ID for verification later
                 printfn "[HotReloadTest] Original module ID: %A" originalAssembly.ManifestModule.ModuleVersionId
                 
-                let simpleTestType = originalAssembly.GetType(typeName)
-                let getValueMethod = simpleTestType.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
-                let originalValue = getValueMethod.Invoke(null, [||]) :?> int
+                // Check if there's any F# metadata
+                let fsharpAttrs = simpleTestType.GetCustomAttributes(true)
+                                    |> Array.filter (fun attr -> attr.GetType().FullName.StartsWith("Microsoft.FSharp"))
+                printfn "  - F# custom attributes on type: %d" fsharpAttrs.Length
+                for attr in fsharpAttrs do
+                    printfn "    - %s" (attr.GetType().FullName)
+                
+                // Check method body
+                printfn "  - Method body inspection:"
+                let methodBody = finalMethod.GetMethodBody()
+                if methodBody <> null then
+                    let ilBytes = methodBody.GetILAsByteArray()
+                    printfn "    - IL bytes: %A" ilBytes
+                    printfn "    - IL hex: %s" (BitConverter.ToString(ilBytes))
+                    
+                    // Try to parse the IL
+                    if ilBytes.Length > 0 then
+                        let firstByte = ilBytes.[0]
+                        let tinyFormat = (firstByte &&& 0x03uy) = 0x02uy
+                        if tinyFormat then
+                            let codeSize = int (firstByte >>> 2)
+                            printfn "    - Format: Tiny (1-byte header)"
+                            printfn "    - Code size from header: %d bytes" codeSize
+                            
+                            // Display the actual IL instructions
+                            printfn "    - Instructions:"
+                            let mutable i = 1 // Skip header
+                            while i < ilBytes.Length do
+                                match ilBytes.[i] with
+                                | 0x1Fuy -> // ldc.i4.s
+                                    if i+1 < ilBytes.Length then
+                                        printfn "      IL_%04X: ldc.i4.s %d" (i-1) (sbyte ilBytes.[i+1])
+                                        i <- i + 1
+                                    else
+                                        printfn "      IL_%04X: ldc.i4.s <incomplete>" (i-1)
+                                | 0x2Auy -> printfn "      IL_%04X: ret" (i-1)
+                                | opcode -> printfn "      IL_%04X: Unknown opcode 0x%02X" (i-1) opcode
+                                i <- i + 1
+                        else
+                            printfn "    - Format: Fat header or not a method body"
+                    else
+                        printfn "    - IL bytes are empty"
+                else
+                    printfn "    - Could not get method body"
+                
+                // Examine module structure
+                let module' = originalAssembly.ManifestModule
+                printfn "  - Module metadatatoken: 0x%08X" module'.MetadataToken
+                printfn "  - Module mvid: %A" module'.ModuleVersionId
+                
+                // Examine all types in the assembly to look for related methods
+                printfn "  - All types in assembly:"
+                let allTypes = originalAssembly.GetTypes()
+                for t in allTypes do
+                    printfn "    - Type: %s (0x%08X)" t.FullName t.MetadataToken
+                    let methods = t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance)
+                    for m in methods do
+                        printfn "      - Method: %s (0x%08X)" m.Name m.MetadataToken
+                
+                let originalValue = finalMethod.Invoke(null, [||]) :?> int
                 printfn "Original value: %d" originalValue
 
                 // Compile modified version (43)
@@ -216,7 +339,7 @@ let getValue() = {0}
                     let generator = DeltaGenerator.create()
                     
                     // Generate the delta - ensure we use originalModuleId
-                    let! delta = DeltaGenerator.generateDelta generator originalAssembly 43
+                    let! delta = DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub
                     
                     match delta with
                     | None ->
@@ -253,53 +376,6 @@ let getValue() = {0}
                         // Also keep the .md extension for direct inspection if needed
                         File.WriteAllBytes(Path.Combine(deltaDir, "1.md"), metadataBytes)
                         File.WriteAllBytes(Path.Combine(deltaDir, "1.pdb"), pdbBytes)
-
-                        // Run mdv and ilspycmd on the delta files
-                        let runAnalysisTools () =
-                            // Run mdv with detailed output
-                            let mdvProcess = new Process()
-                            mdvProcess.StartInfo.FileName <- "/Users/nat/.dotnet/tools/mdv"
-                            mdvProcess.StartInfo.Arguments <- $"/g:1.meta;1.il 0.dll /il+ /md+ /stats+ /assemblyRefs+"
-                            mdvProcess.StartInfo.UseShellExecute <- false
-                            mdvProcess.StartInfo.RedirectStandardOutput <- true
-                            mdvProcess.StartInfo.RedirectStandardError <- true
-                            mdvProcess.StartInfo.WorkingDirectory <- deltaDir
-                            
-                            printfn "[HotReloadTest] Running mdv analysis..."
-                            mdvProcess.Start() |> ignore
-                            let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
-                            let mdvError = mdvProcess.StandardError.ReadToEnd()
-                            mdvProcess.WaitForExit()
-                            
-                            if mdvProcess.ExitCode <> 0 then
-                                printfn "[HotReloadTest] mdv failed with exit code %d" mdvProcess.ExitCode
-                                printfn "Standard Error: %s" mdvError
-                            else
-                                printfn "[HotReloadTest] mdv output:\n%s" mdvOutput
-                            
-                            // Run ilspycmd on both versions
-                            let ilspyProcess = new Process()
-                            ilspyProcess.StartInfo.FileName <- "/Users/nat/.dotnet/tools/ilspycmd"
-                            ilspyProcess.StartInfo.Arguments <- "0.dll"
-                            ilspyProcess.StartInfo.UseShellExecute <- false
-                            ilspyProcess.StartInfo.RedirectStandardOutput <- true
-                            ilspyProcess.StartInfo.RedirectStandardError <- true
-                            ilspyProcess.StartInfo.WorkingDirectory <- deltaDir
-                            
-                            printfn "[HotReloadTest] Running ilspycmd on original version..."
-                            ilspyProcess.Start() |> ignore
-                            let ilspyOutput = ilspyProcess.StandardOutput.ReadToEnd()
-                            let ilspyError = ilspyProcess.StandardError.ReadToEnd()
-                            ilspyProcess.WaitForExit()
-                            
-                            if ilspyProcess.ExitCode <> 0 then
-                                printfn "[HotReloadTest] ilspycmd failed with exit code %d" ilspyProcess.ExitCode
-                                printfn "Standard Error: %s" ilspyError
-                            else
-                                printfn "[HotReloadTest] ilspycmd output:\n%s" ilspyOutput
-                        
-                        // Run the analysis tools
-                        runAnalysisTools()
                         
                         // Analyze the IL delta in more detail
                         printfn "[HotReloadTest] Detailed IL delta analysis:"
@@ -398,17 +474,145 @@ let getValue() = {0}
                             )
                             printfn "[HotReloadTest] Update applied successfully"
                             
+                            // Run mdv analysis on the delta files
+                            printfn "[HotReloadTest] Running mdv analysis..."
+                            
+                            // Use mdv's auto-discovery feature in the current directory
+                            let startInfo = ProcessStartInfo(
+                                FileName = "mdv",
+                                Arguments = "", // No arguments needed for auto-discovery
+                                WorkingDirectory = deltaDir, // Set working directory to deltaDir
+                                RedirectStandardOutput = true,
+                                UseShellExecute = false,
+                                CreateNoWindow = true
+                            )
+                            
+                            try
+                                use mdvProcess = Process.Start(startInfo)
+                                let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
+                                mdvProcess.WaitForExit()
+                                printfn "[HotReloadTest] mdv output:\n%s" mdvOutput
+                            with ex ->
+                                printfn "[HotReloadTest] Failed to run mdv: %s" ex.Message
+                            
+                            // Also run ilspycmd on both versions to compare IL
+                            printfn "[HotReloadTest] Running ilspycmd for IL analysis..."
+                            
+                            // Function to run ilspycmd and return output
+                            let runILSpyCmdAndSave (dllPath: string) (outputPath: string) =
+                                let startInfo = ProcessStartInfo(
+                                    FileName = "ilspycmd",
+                                    Arguments = dllPath,
+                                    RedirectStandardOutput = true,
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true
+                                )
+                                
+                                try
+                                    use process = Process.Start(startInfo)
+                                    let output = process.StandardOutput.ReadToEnd()
+                                    process.WaitForExit()
+                                    
+                                    // Save output to file
+                                    File.WriteAllText(outputPath, output)
+                                    printfn "[HotReloadTest] Saved IL analysis for %s to %s" 
+                                        (Path.GetFileName(dllPath)) outputPath
+                                    
+                                    // Return true if successful
+                                    true
+                                with ex ->
+                                    printfn "[HotReloadTest] Failed to run ilspycmd on %s: %s" 
+                                        (Path.GetFileName(dllPath)) ex.Message
+                                    false
+                            
+                            // Analyze original DLL
+                            let originalILPath = Path.Combine(deltaDir, "original.il")
+                            let originalSuccess = runILSpyCmdAndSave originalDll originalILPath
+                            
+                            // Analyze modified DLL
+                            let modifiedILPath = Path.Combine(deltaDir, "modified.il")
+                            let modifiedSuccess = runILSpyCmdAndSave modifiedDll modifiedILPath
+                            
+                            // Compare the IL files if both were analyzed successfully
+                            if originalSuccess && modifiedSuccess then
+                                printfn "[HotReloadTest] Comparing IL differences between original and modified assemblies..."
+                                
+                                // Run diff command through Process.Start
+                                let diffStartInfo = ProcessStartInfo(
+                                    FileName = "diff",
+                                    Arguments = sprintf "-u \"%s\" \"%s\"" originalILPath modifiedILPath,
+                                    RedirectStandardOutput = true,
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true
+                                )
+                                
+                                try
+                                    use diffProcess = Process.Start(diffStartInfo)
+                                    let diffOutput = diffProcess.StandardOutput.ReadToEnd()
+                                    diffProcess.WaitForExit()
+                                    
+                                    // Save diff output
+                                    let diffPath = Path.Combine(deltaDir, "il_diff.txt")
+                                    File.WriteAllText(diffPath, diffOutput)
+                                    
+                                    if diffOutput.Trim().Length > 0 then
+                                        printfn "[HotReloadTest] IL differences found. See %s for details." diffPath
+                                    else
+                                        printfn "[HotReloadTest] No IL differences found between original and modified assemblies."
+                                with ex ->
+                                    printfn "[HotReloadTest] Failed to compare IL files: %s" ex.Message
+                            
+                            // Dump more information about the method after the update
+                            try
+                                // Get the method descriptor info
+                                printfn "[HotReloadTest] Method information after update:"
+                                printfn "  - Method display name: %s" finalMethod.Name
+                                printfn "  - Method declaring type: %s" finalMethod.DeclaringType.FullName
+                                printfn "  - Method token: 0x%08X" finalMethod.MetadataToken
+                                printfn "  - Method attributes: %A" finalMethod.Attributes
+                                printfn "  - Method implementation flags: %A" finalMethod.MethodImplementationFlags 
+                                printfn "  - Method return type: %s" finalMethod.ReturnType.FullName
+                                
+                                // Get module information
+                                let module' = finalMethod.Module
+                                printfn "  - Module: %s" module'.Name
+                                printfn "  - Module version ID: %A" module'.ModuleVersionId
+                                
+                                // Get the entry point (code address)
+                                printfn "  - Method handle: %A" finalMethod.MethodHandle
+                                // Try to get function pointer
+                                try
+                                    let funcPtr = finalMethod.MethodHandle.GetFunctionPointer()
+                                    let ptrValue = funcPtr.ToInt64()
+                                    printfn "  - Function pointer: 0x%016X" ptrValue
+                                with ex ->
+                                    printfn "  - Failed to get function pointer: %s" ex.Message
+                            with ex ->
+                                printfn "[HotReloadTest] Failed to get additional method info: %s" ex.Message
+                            
                             // Inspect the IL of the method after applying the update
                             printfn "[HotReloadTest] Inspecting method IL after update using MethodBody.GetILAsByteArray():"
-                            let methodBody = getValueMethod.GetMethodBody()
+                            let methodBody = finalMethod.GetMethodBody()
                             if methodBody <> null then
                                 let ilBytes = methodBody.GetILAsByteArray()
                                 printfn "  - IL bytes after update: %A" ilBytes
+                                if ilBytes <> null && ilBytes.Length > 0 then
+                                    printfn "  - IL hex after update: %s" (BitConverter.ToString(ilBytes))
+                                    // Try to parse the IL
+                                    let tinyFormat = (ilBytes[0] &&& 0x03uy) = 0x02uy
+                                    if tinyFormat then
+                                        let codeSize = int (ilBytes[0] >>> 2)
+                                        printfn "  - IL format: Tiny (1-byte header)"
+                                        printfn "  - Code size from header: %d bytes" codeSize
+                                    else
+                                        printfn "  - IL format: Fat header or not a method body"
+                                else
+                                    printfn "  - IL bytes are null or empty after update"
                             else
                                 printfn "  - Could not get method body"
                             
                             // Verify the update
-                            let newValue = getValueMethod.Invoke(null, [||]) :?> int
+                            let newValue = finalMethod.Invoke(null, [||]) :?> int
                             printfn "New value after update: %d" newValue
                             
                             if newValue = 43 then

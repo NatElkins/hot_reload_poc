@@ -28,7 +28,7 @@ module HotReloadAgent =
     let updateValue (agent: HotReloadAgent) (newValue: int) =
         async {
             printfn "[HotReloadAgent] Updating value from %d to %d" agent.CurrentValue newValue
-            match! DeltaGenerator.generateDelta agent.DeltaGenerator agent.TargetAssembly newValue with
+            match! DeltaGenerator.generateDelta agent.DeltaGenerator agent.TargetAssembly newValue false with
             | Some delta ->
                 try
                     printfn "[HotReloadAgent] Applying update to assembly..."

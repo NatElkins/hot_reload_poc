@@ -96,18 +96,26 @@ module DeltaGenerator =
             metadataBuilder.GetOrAddGuid(Guid.Empty)  // EncBaseId - can be empty for deltas
         )
         
-        // Add the type to TypeDef table
+        // For EnC, we need to include the TypeDef entry to ensure consistency
+        // Add the type to TypeDef table as a reference
         let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
+        
+        // Use dummy handles for empty or not used references
+        let emptyEntityHandle = EntityHandle()
+        let emptyFieldHandle = FieldDefinitionHandle()
+        let emptyMethodHandle = MethodDefinitionHandle()
+        let emptyParamHandle = ParameterHandle()
+        
         metadataBuilder.AddTypeDefinition(
-            TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.BeforeFieldInit,
+            TypeAttributes.Public ||| TypeAttributes.Class,
             metadataBuilder.GetOrAddString("SimpleTest"),
-            metadataBuilder.GetOrAddString("TestApp"),
-            MetadataTokens.TypeReferenceHandle(0x01000001), // System.Object
-            MetadataTokens.FieldDefinitionHandle(0x04000001),
-            MetadataTokens.MethodDefinitionHandle(0x06000001)
+            metadataBuilder.GetOrAddString(""), // Empty namespace
+            emptyEntityHandle, // Base type reference - can be empty for updates
+            emptyFieldHandle, // Field list - can be empty for updates
+            emptyMethodHandle // Method list - can be empty for updates
         ) |> ignore
         
-        // Add the method to MethodDef table
+        // Add method definition to the builder
         let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
         metadataBuilder.AddMethodDefinition(
             MethodAttributes.Public ||| MethodAttributes.Static ||| MethodAttributes.HideBySig,
@@ -115,14 +123,17 @@ module DeltaGenerator =
             metadataBuilder.GetOrAddString("getValue"),
             metadataBuilder.GetOrAddBlob(generateMethodSignature()),
             0, // RVA - will be filled in by the runtime
-            MetadataTokens.ParameterHandle(0x08000001)  // ParameterList - will be filled in by the runtime
+            emptyParamHandle // No parameters needed for updates
         ) |> ignore
         
         // Add both the type and method to ENCMap
         metadataBuilder.AddEncMapEntry(typeDefHandle)
         metadataBuilder.AddEncMapEntry(methodDefHandle)
         
-        // Add EncLog entry for method update
+        // Add EncLog entries
+        metadataBuilder.AddEncLogEntry(
+            typeDefHandle,
+            EditAndContinueOperation.Default)
         metadataBuilder.AddEncLogEntry(
             methodDefHandle,
             EditAndContinueOperation.Default)
@@ -148,14 +159,27 @@ module DeltaGenerator =
         printfn "[DeltaGenerator] Generating IL delta..."
         let ilBuilder = new BlobBuilder()
         
-        // For EnC updates, we only need the raw IL instructions
-        // No header is needed as we're only updating the method body
-        let ilCode = [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
-        ilBuilder.WriteBytes(ilCode)
+        // For EnC updates, we need to include a valid method body header
+        // For a tiny method format (less than 64 bytes of IL), the header is a single byte:
+        // The format is: (codeSize << 2) | 2
+        // Where the lowest two bits are 10 (0x2) and the upper 6 bits are the code size
+        
+        // Our IL code is just 2 bytes (ldc.i4.s + ret + operand)
+        let ilInstructions = [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
+        let codeSize = ilInstructions.Length
+        
+        // Create the tiny format method header: (codeSize << 2) | 2
+        // This tells the runtime that this is a tiny-format method body with 'codeSize' bytes of IL
+        let headerByte = byte ((codeSize <<< 2) ||| 2) // Should be 0x0E for 3 bytes of IL
+        
+        // Write the method header followed by the IL code
+        ilBuilder.WriteByte(headerByte)
+        ilBuilder.WriteBytes(ilInstructions)
         
         let ilBytes = ilBuilder.ToArray()
-        printfn "[DeltaGenerator] Generated IL delta: %d bytes" ilBytes.Length
+        printfn "[DeltaGenerator] Generated IL delta with header: %d bytes" ilBytes.Length
         printfn "[DeltaGenerator] IL delta bytes: %A" ilBytes
+        printfn "[DeltaGenerator] IL header byte: 0x%02X (Tiny format, code size: %d)" headerByte codeSize
         ImmutableArray.CreateRange(ilBytes)
 
     /// <summary>
@@ -207,26 +231,105 @@ module DeltaGenerator =
         ImmutableArray.CreateRange(pdbBytes)
 
     /// <summary>
+    /// Generates IL delta for F# method
+    /// </summary>
+    let generateFSharpILDelta (returnValue: int) (isInvokeStub: bool) =
+        printfn "[DeltaGenerator] Generating F# specific IL delta for returnValue=%d (isInvokeStub=%b)" returnValue isInvokeStub
+        
+        // The IL will be different depending on if we're targeting an InvokeStub method or a regular F# method
+        if isInvokeStub then
+            // For InvokeStub methods, we need to handle the F# compiler's invocation pattern
+            let ilBuilder = new BlobBuilder()
+            
+            // IL instructions for the method body
+            let ilInstructions = [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
+            let codeSize = ilInstructions.Length
+            
+            // Create the tiny format method header: (codeSize << 2) | 2
+            let headerByte = byte ((codeSize <<< 2) ||| 2) // 0x0E for 3 bytes
+            
+            // Write the method header followed by the IL code
+            ilBuilder.WriteByte(headerByte)
+            ilBuilder.WriteBytes(ilInstructions)
+            
+            let ilBytes = ilBuilder.ToArray()
+            printfn "[DeltaGenerator] Generated InvokeStub IL delta with header: %d bytes" ilBytes.Length
+            printfn "[DeltaGenerator] InvokeStub IL delta bytes: %A" ilBytes
+            printfn "[DeltaGenerator] IL header byte: 0x%02X (Tiny format, code size: %d)" headerByte codeSize
+            ImmutableArray.CreateRange(ilBytes)
+        else
+            // For regular F# methods, use our improved approach with proper headers
+            generateILDelta returnValue
+
+    /// <summary>
     /// Main entry point for generating deltas.
     /// </summary>
-    let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) =
+    let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) (isInvokeStub: bool) =
         async {
             printfn "[DeltaGenerator] ===== Starting delta generation ====="
             printfn "[DeltaGenerator] Assembly: %s" assembly.FullName
             printfn "[DeltaGenerator] Assembly location: %s" assembly.Location
             printfn "[DeltaGenerator] Module ID: %A" assembly.ManifestModule.ModuleVersionId
             printfn "[DeltaGenerator] Target return value: %d" returnValue
+            printfn "[DeltaGenerator] Using InvokeStub method: %b" isInvokeStub
             
             // Find the method to update
             printfn "[DeltaGenerator] Looking for SimpleTest type..."
-            let methodToUpdate = 
+            
+            // Get the regular method and also look for InvokeStub methods
+            let methodToUpdate, invokeStubMethods = 
                 let type' = assembly.GetType("SimpleTest")
                 if type' = null then 
                     printfn "[DeltaGenerator] Error: Could not find SimpleTest type"
-                    null
+                    null, [||]
                 else 
                     printfn "[DeltaGenerator] Found SimpleTest type, looking for getValue method..."
-                    type'.GetMethod("getValue", BindingFlags.Public ||| BindingFlags.Static)
+                    let regularMethod = type'.GetMethod("getValue", BindingFlags.Public ||| BindingFlags.Static)
+                    
+                    // Look for F# InvokeStub methods that might be related
+                    printfn "[DeltaGenerator] Looking for F# invoke stub methods..."
+                    let stubMethods = 
+                        assembly.GetTypes()
+                        |> Array.collect (fun t -> 
+                            t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance)
+                            |> Array.filter (fun m -> 
+                                // Look for methods with broader criteria that might be invoke stubs:
+                                // 1. Contains the method name (getValue)
+                                // 2. Contains "InvokeStub" in the type or method name
+                                // 3. Type name starts with "InvokeStub" or contains patterns like "<StartupCode"
+                                // 4. From a compiler-generated type
+                                let methodNameMatches = m.Name.Contains("getValue") || m.Name.Contains("get_") 
+                                let typeNameSuggestsStub = 
+                                    t.Name.Contains("InvokeStub") || 
+                                    t.FullName.Contains("InvokeStub") ||
+                                    m.Name.Contains("InvokeStub") ||
+                                    t.Name.StartsWith("<StartupCode") ||
+                                    t.Name.Contains("$") || // F# compiler often uses $ in generated type names
+                                    t.Name.Contains("@") || 
+                                    t.Name.Contains("FastFunc") ||
+                                    t.Name.Contains("function")
+                                let hasCompilerGeneratedAttr = 
+                                    try
+                                        t.CustomAttributes
+                                            |> Seq.exists (fun attr -> 
+                                                attr.AttributeType.Name = "CompilerGeneratedAttribute")
+                                    with _ -> false
+                                
+                                // Dump info about all methods to help with debugging
+                                printfn "[DeltaGenerator] Examining method: %s::%s (Token: 0x%08X)" t.FullName m.Name m.MetadataToken
+                                
+                                // More aggressive matching:
+                                methodNameMatches || // Match any method containing our target name
+                                (methodNameMatches && typeNameSuggestsStub) || 
+                                (methodNameMatches && hasCompilerGeneratedAttr) ||
+                                (t.Name.Contains("InvokeStub") || t.FullName.Contains("InvokeStub")) // Any InvokeStub type is interesting
+                            ))
+                    
+                    printfn "[DeltaGenerator] Found %d potential invoke stub methods" stubMethods.Length
+                    for m in stubMethods do
+                        printfn "  - %s::%s (Token: 0x%08X)" m.DeclaringType.FullName m.Name m.MetadataToken
+                    
+                    regularMethod, stubMethods
             
             match methodToUpdate with
             | null -> 
@@ -237,28 +340,59 @@ module DeltaGenerator =
                 let declaringTypeToken = method'.DeclaringType.MetadataToken
                 
                 printfn "[DeltaGenerator] Found method info:"
-                printfn "  - Token: %d" methodToken
-                printfn "  - Declaring type token: %d" declaringTypeToken
+                printfn "  - Token: %d (0x%08X)" methodToken methodToken
+                printfn "  - Declaring type token: %d (0x%08X)" declaringTypeToken declaringTypeToken
                 printfn "  - Method attributes: %A" method'.Attributes
-                printfn "  - Method implementation attributes: %A" method'.MethodImplementationFlags
+                printfn "  - Method implementation flags: %A" method'.MethodImplementationFlags
+                
+                // Also show InvokeStub method IL if any were found
+                if invokeStubMethods.Length > 0 then
+                    printfn "[DeltaGenerator] Examining F# InvokeStub methods:"
+                    for stubMethod in invokeStubMethods do
+                        printfn "  - Examining stub method: %s::%s (Token: 0x%08X)" 
+                            stubMethod.DeclaringType.FullName stubMethod.Name stubMethod.MetadataToken
+                        
+                        // Check if this method has a body we can examine
+                        let body = stubMethod.GetMethodBody()
+                        if body <> null then
+                            let ilBytes = body.GetILAsByteArray()
+                            if ilBytes <> null && ilBytes.Length > 0 then
+                                printfn "    - IL bytes: %A" ilBytes
+                                printfn "    - IL hex: %s" (BitConverter.ToString(ilBytes))
+                
+                // Check if we should update an InvokeStub method instead
+                let targetMethodToken, targetTypeToken =
+                    if invokeStubMethods.Length > 0 && not isInvokeStub then
+                        // Use the first InvokeStub method that seems relevant
+                        let stubMethod = invokeStubMethods.[0]
+                        printfn "[DeltaGenerator] Using InvokeStub method for update: %s::%s (Token: 0x%08X)"
+                            stubMethod.DeclaringType.FullName stubMethod.Name stubMethod.MetadataToken
+                        stubMethod.MetadataToken, stubMethod.DeclaringType.MetadataToken
+                    else if isInvokeStub then
+                        printfn "[DeltaGenerator] Already have InvokeStub method flag set, using provided token: 0x%08X"
+                            methodToken
+                        methodToken, declaringTypeToken
+                    else
+                        // Use the original method
+                        methodToken, declaringTypeToken
                 
                 // Generate minimal metadata and IL deltas
                 printfn "[DeltaGenerator] Generating metadata delta..."
                 // Ensure we're using the same ModuleId as the original assembly
                 let moduleId = assembly.ManifestModule.ModuleVersionId
-                let metadataDelta = generateMetadataDelta methodToken declaringTypeToken moduleId
+                let metadataDelta = generateMetadataDelta targetMethodToken targetTypeToken moduleId
                 printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
                 printfn "[DeltaGenerator] Generating IL delta..."
-                let ilDelta = generateILDelta returnValue
+                let ilDelta = generateFSharpILDelta returnValue isInvokeStub
                 printfn "[DeltaGenerator] IL delta size: %d bytes" ilDelta.Length
                 
                 printfn "[DeltaGenerator] Generating PDB delta..."
-                let pdbDelta = generatePDBDelta methodToken
+                let pdbDelta = generatePDBDelta targetMethodToken
                 printfn "[DeltaGenerator] PDB delta size: %d bytes" pdbDelta.Length
                 
                 // Create the complete delta
-                let updatedMethods = ImmutableArray.Create<int>(methodToken)
+                let updatedMethods = ImmutableArray.Create<int>(targetMethodToken)
                 
                 // Verify the deltas
                 printfn "[DeltaGenerator] Verifying deltas..."

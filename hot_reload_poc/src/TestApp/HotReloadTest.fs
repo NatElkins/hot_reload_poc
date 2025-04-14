@@ -509,9 +509,9 @@ let getValue() = {0}
                                 )
                                 
                                 try
-                                    use process = Process.Start(startInfo)
-                                    let output = process.StandardOutput.ReadToEnd()
-                                    process.WaitForExit()
+                                    use proc = Process.Start(startInfo)
+                                    let output = proc.StandardOutput.ReadToEnd()
+                                    proc.WaitForExit()
                                     
                                     // Save output to file
                                     File.WriteAllText(outputPath, output)

@@ -126,17 +126,19 @@ module DeltaGenerator =
             emptyParamHandle // No parameters needed for updates
         ) |> ignore
         
-        // Add both the type and method to ENCMap
-        metadataBuilder.AddEncMapEntry(typeDefHandle)
-        metadataBuilder.AddEncMapEntry(methodDefHandle)
-        
-        // Add EncLog entries
-        metadataBuilder.AddEncLogEntry(
-            typeDefHandle,
-            EditAndContinueOperation.Default)
-        metadataBuilder.AddEncLogEntry(
-            methodDefHandle,
-            EditAndContinueOperation.Default)
+        // Add EncMap entries FIRST, ensuring correct order (TypeDef then MethodDef)
+        // Table indices: TypeDef=0x02, MethodDef=0x06
+        // Use !> from Prelude for conversion
+        let typeEntityHandle : EntityHandle = !> typeDefHandle
+        let methodEntityHandle : EntityHandle = !> methodDefHandle
+
+        // Add to EncMap in known correct order (TypeDef < MethodDef)
+        metadataBuilder.AddEncMapEntry(typeEntityHandle)
+        metadataBuilder.AddEncMapEntry(methodEntityHandle)
+
+        // Add EncLog entries, mirroring the EncMap entries, using Default operation
+        metadataBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default)
+        metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
         
         // Create and serialize the metadata using MetadataRootBuilder
         let metadataBytes = BlobBuilder()
@@ -360,20 +362,17 @@ module DeltaGenerator =
                                 printfn "    - IL bytes: %A" ilBytes
                                 printfn "    - IL hex: %s" (BitConverter.ToString(ilBytes))
                 
-                // Check if we should update an InvokeStub method instead
+                // Determine the correct target method token based on the isInvokeStub flag
                 let targetMethodToken, targetTypeToken =
-                    if invokeStubMethods.Length > 0 && not isInvokeStub then
-                        // Use the first InvokeStub method that seems relevant
-                        let stubMethod = invokeStubMethods.[0]
-                        printfn "[DeltaGenerator] Using InvokeStub method for update: %s::%s (Token: 0x%08X)"
-                            stubMethod.DeclaringType.FullName stubMethod.Name stubMethod.MetadataToken
-                        stubMethod.MetadataToken, stubMethod.DeclaringType.MetadataToken
-                    else if isInvokeStub then
-                        printfn "[DeltaGenerator] Already have InvokeStub method flag set, using provided token: 0x%08X"
-                            methodToken
+                    if isInvokeStub then
+                        // If the flag indicates we are targeting an InvokeStub, use the provided method info.
+                        // We trust the caller provided the correct token for the InvokeStub.
+                        printfn "[DeltaGenerator] Targeting InvokeStub method as requested (Token: 0x%08X)" methodToken
                         methodToken, declaringTypeToken
                     else
-                        // Use the original method
+                        // If we are not targeting an InvokeStub, use the original method's info,
+                        // regardless of what the invokeStubMethods search found.
+                        printfn "[DeltaGenerator] Targeting regular method (Token: 0x%08X)" methodToken
                         methodToken, declaringTypeToken
                 
                 // Generate minimal metadata and IL deltas

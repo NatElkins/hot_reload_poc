@@ -475,7 +475,8 @@ let getValue() = {0}
                         // Use mdv's auto-discovery feature in the current directory with detailed flags
                         let startInfo = ProcessStartInfo(
                             FileName = "mdv",
-                            Arguments = "0.dll /g /stats+ /assemblyRefs+ /il+ /md+", // Added detailed flags
+                            Arguments = "0.dll '/g:1.meta;1.il' /il+ /md+", // Added detailed flags
+                            // Arguments = "0.dll '/g:1.meta;1.il' /stats+ /assemblyRefs+ /il+ /md+", // Added detailed flags
                             WorkingDirectory = deltaDir, // Set working directory to deltaDir
                             RedirectStandardOutput = true,
                             UseShellExecute = false,

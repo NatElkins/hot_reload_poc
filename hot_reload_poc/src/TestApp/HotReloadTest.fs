@@ -427,8 +427,28 @@ let getValue() = {0}
                     
                     printfn "[HotReloadTest] Delta files written to: %s" deltaDir
                     printfn "[HotReloadTest] To analyze with mdv, run: cd \"%s\" && mdv /stats+ /assemblyRefs+ /il+ /md+" deltaDir
-                    // printfn "[HotReloadTest] Or with explicit parameters: mdv /g:1.meta;1.il 0.dll" // Alternative mdv command
+
+                    // Run mdv analysis on the delta files BEFORE attempting update
+                    printfn "[HotReloadTest] Running mdv analysis BEFORE update attempt..."
                     
+                    // Use mdv's auto-discovery feature in the current directory with detailed flags
+                    let startInfo = ProcessStartInfo(
+                        FileName = "mdv",
+                        Arguments = "0.dll '/g:1.il;1.meta' /stats+ /assemblyRefs+ /il+ /md+", // Added detailed flags, simplified /g
+                        WorkingDirectory = deltaDir, // Set working directory to deltaDir
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    )
+                    
+                    try
+                        use mdvProcess = Process.Start(startInfo)
+                        let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
+                        mdvProcess.WaitForExit()
+                        printfn "[HotReloadTest] mdv (pre-update) output:\n%s" mdvOutput
+                    with ex ->
+                        printfn "[HotReloadTest] Failed to run mdv (pre-update): %s" ex.Message
+
                     try
                         printfn "[HotReloadTest] Attempting to apply update..."
                         printfn "  - Assembly: %s" originalAssembly.FullName
@@ -468,28 +488,6 @@ let getValue() = {0}
                             delta.PdbDelta.AsSpan()
                         )
                         printfn "[HotReloadTest] Update applied successfully"
-                        
-                        // Run mdv analysis on the delta files
-                        printfn "[HotReloadTest] Running mdv analysis..."
-                        
-                        // Use mdv's auto-discovery feature in the current directory with detailed flags
-                        let startInfo = ProcessStartInfo(
-                            FileName = "mdv",
-                            Arguments = "0.dll '/g:1.meta;1.il' /il+ /md+", // Added detailed flags
-                            // Arguments = "0.dll '/g:1.meta;1.il' /stats+ /assemblyRefs+ /il+ /md+", // Added detailed flags
-                            WorkingDirectory = deltaDir, // Set working directory to deltaDir
-                            RedirectStandardOutput = true,
-                            UseShellExecute = false,
-                            CreateNoWindow = true
-                        )
-                        
-                        try
-                            use mdvProcess = Process.Start(startInfo)
-                            let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
-                            mdvProcess.WaitForExit()
-                            printfn "[HotReloadTest] mdv output:\n%s" mdvOutput
-                        with ex ->
-                            printfn "[HotReloadTest] Failed to run mdv: %s" ex.Message
                         
                         // Dump more information about the method after the update
                         try

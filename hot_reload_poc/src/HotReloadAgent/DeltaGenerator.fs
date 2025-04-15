@@ -79,38 +79,81 @@ module DeltaGenerator =
     /// Generates metadata delta for a method update.
     /// </summary>
     let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
-        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X (Module + MethodSig EnC)" methodToken
+        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X (Restoring Module+TypeDef+MethodDef + Refs + MethodSig EnC)" methodToken
+        printfn "[DeltaGenerator] Declaring type token: 0x%08X" declaringTypeToken
         printfn "[DeltaGenerator] Using module ID: %A" moduleId
         
         let metadataBuilder = MetadataBuilder()
 
-        // Add Module definition (Seems required based on C# delta size/structure)
-        let _ = metadataBuilder.AddModule(
-            1, // Generation 1 for deltas
-            metadataBuilder.GetOrAddString("delta_module.dll"), // Module name for delta
-            metadataBuilder.GetOrAddGuid(moduleId), // Use the actual Mvid from the original assembly
-            metadataBuilder.GetOrAddGuid(Guid.Empty), // EncId - can be empty for deltas
-            metadataBuilder.GetOrAddGuid(Guid.Empty)  // EncBaseId - can be empty for deltas
-        )
+        // 1. Add Module definition 
+        let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll")
+        let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
+        let zeroGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Empty)
+        let _ = metadataBuilder.AddModule(1, moduleNameHandle, mvidHandle, zeroGuidHandle, zeroGuidHandle)
 
-        // Get MethodDef handle *token* to reference in EnC tables
-        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
-        let methodEntityHandle : EntityHandle = !> methodDefHandle
+        // 2. Add essential references (BEFORE TypeDef)
+        let systemRuntimeAssemblyName = metadataBuilder.GetOrAddString("System.Runtime")
+        let systemRuntimeVersion = System.Version(10, 0, 0, 0) 
+        let ecmaPublicKeyTokenBlob = metadataBuilder.GetOrAddBlob([| 0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy |])
+        let systemRuntimeAssemblyRef = metadataBuilder.AddAssemblyReference(
+            name = systemRuntimeAssemblyName, 
+            version = systemRuntimeVersion, 
+            culture = metadataBuilder.GetOrAddString(""), 
+            publicKeyOrToken = ecmaPublicKeyTokenBlob,
+            flags = AssemblyFlags.PublicKey, 
+            hashValue = BlobHandle() 
+        )
+        let systemNamespace = metadataBuilder.GetOrAddString("System")
+        let objectTypeName = metadataBuilder.GetOrAddString("Object")
+        let objectTypeRef = metadataBuilder.AddTypeReference(systemRuntimeAssemblyRef, systemNamespace, objectTypeName) 
+        let int32TypeName = metadataBuilder.GetOrAddString("Int32")
+        let _int32TypeRef = metadataBuilder.AddTypeReference(systemRuntimeAssemblyRef, systemNamespace, int32TypeName) 
+
+        // 3. Add TypeDef definition (AFTER References)
+        let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
+        let emptyFieldHandle = FieldDefinitionHandle()
+        let emptyMethodHandle = MethodDefinitionHandle()
+        metadataBuilder.AddTypeDefinition(
+            // Attributes from baseline mdv: Public, Abstract, Sealed (0x181)
+            TypeAttributes.Public ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed, 
+            metadataBuilder.GetOrAddString("SimpleTest"),
+            metadataBuilder.GetOrAddString(""), // Empty namespace
+            objectTypeRef, // Use the handle created above for System.Object
+            emptyFieldHandle, 
+            emptyMethodHandle 
+        ) |> ignore
         
-        // Create Standalone Signature for empty locals
+        // 4. Add MethodDef definition (Restoring this)
+        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
+        let emptyParamHandle = ParameterHandle()
+        // Get the handle for the method signature blob we generated earlier
+        let methodSignatureBlobHandle = metadataBuilder.GetOrAddBlob(generateMethodSignature())
+        metadataBuilder.AddMethodDefinition(
+            MethodAttributes.Public ||| MethodAttributes.Static, 
+            MethodImplAttributes.IL,
+            metadataBuilder.GetOrAddString("getValue"),
+            methodSignatureBlobHandle, // Use the handle for the signature blob
+            0, // RVA - filled by runtime
+            emptyParamHandle // No parameters
+        ) |> ignore
+
+        // 5. Get MethodDef handle for EnC tables
+        let methodEntityHandle : EntityHandle = !> methodDefHandle // Use the handle from AddMethodDefinition
+        
+        // 6. Create AND Add Standalone Signature for empty locals (Reverting to explicit add)
         let emptyLocalsBlob = metadataBuilder.GetOrAddBlob([| 0x07uy; 0x00uy |]) 
-        let sigHandle = metadataBuilder.AddStandaloneSignature(emptyLocalsBlob)
+        let sigHandle = metadataBuilder.AddStandaloneSignature(emptyLocalsBlob) // Use the added handle
         let sigEntityHandle : EntityHandle = !> sigHandle
 
-        // Add EncMap entries (MethodDef and StandAloneSig only) in known correct order
+        // 7. Add EncMap entries (MethodDef and StandAloneSig only) in known correct order
         metadataBuilder.AddEncMapEntry(methodEntityHandle)
         metadataBuilder.AddEncMapEntry(sigEntityHandle)
 
-        // Add EncLog entries (MethodDef and StandAloneSig only) using Default operation
+        // 8. Add EncLog entries (MethodDef and StandAloneSig only) using Default operation
         metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
         metadataBuilder.AddEncLogEntry(sigEntityHandle, EditAndContinueOperation.Default)
 
-        // Create and serialize the metadata using MetadataRootBuilder
+        // 9. Create and serialize the metadata using MetadataRootBuilder
         let metadataBytes = BlobBuilder()
         let rootBuilder = MetadataRootBuilder(metadataBuilder)
         

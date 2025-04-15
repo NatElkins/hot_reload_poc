@@ -79,67 +79,37 @@ module DeltaGenerator =
     /// Generates metadata delta for a method update.
     /// </summary>
     let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
-        printfn "[DeltaGenerator] Generating metadata delta for method getValue (token: %d)" methodToken
-        printfn "[DeltaGenerator] Declaring type token: %d" declaringTypeToken
+        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X (Module + MethodSig EnC)" methodToken
         printfn "[DeltaGenerator] Using module ID: %A" moduleId
         
-        // Use the MetadataBuilder for correct metadata construction
         let metadataBuilder = MetadataBuilder()
-        
-        // The Module table must be present in all metadata blobs (including deltas)
-        // Add a row to the Module table with the correct module ID
+
+        // Add Module definition (Seems required based on C# delta size/structure)
         let _ = metadataBuilder.AddModule(
             1, // Generation 1 for deltas
-            metadataBuilder.GetOrAddString("original.dll"), // Use the actual module name
+            metadataBuilder.GetOrAddString("delta_module.dll"), // Module name for delta
             metadataBuilder.GetOrAddGuid(moduleId), // Use the actual Mvid from the original assembly
             metadataBuilder.GetOrAddGuid(Guid.Empty), // EncId - can be empty for deltas
             metadataBuilder.GetOrAddGuid(Guid.Empty)  // EncBaseId - can be empty for deltas
         )
-        
-        // For EnC, we need to include the TypeDef entry to ensure consistency
-        // Add the type to TypeDef table as a reference
-        let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
-        
-        // Use dummy handles for empty or not used references
-        let emptyEntityHandle = EntityHandle()
-        let emptyFieldHandle = FieldDefinitionHandle()
-        let emptyMethodHandle = MethodDefinitionHandle()
-        let emptyParamHandle = ParameterHandle()
-        
-        metadataBuilder.AddTypeDefinition(
-            TypeAttributes.Public ||| TypeAttributes.Class,
-            metadataBuilder.GetOrAddString("SimpleTest"),
-            metadataBuilder.GetOrAddString(""), // Empty namespace
-            emptyEntityHandle, // Base type reference - can be empty for updates
-            emptyFieldHandle, // Field list - can be empty for updates
-            emptyMethodHandle // Method list - can be empty for updates
-        ) |> ignore
-        
-        // Add method definition to the builder
+
+        // Get MethodDef handle *token* to reference in EnC tables
         let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
-        metadataBuilder.AddMethodDefinition(
-            MethodAttributes.Public ||| MethodAttributes.Static ||| MethodAttributes.HideBySig,
-            MethodImplAttributes.IL,
-            metadataBuilder.GetOrAddString("getValue"),
-            metadataBuilder.GetOrAddBlob(generateMethodSignature()),
-            0, // RVA - will be filled in by the runtime
-            emptyParamHandle // No parameters needed for updates
-        ) |> ignore
-        
-        // Add EncMap entries FIRST, ensuring correct order (TypeDef then MethodDef)
-        // Table indices: TypeDef=0x02, MethodDef=0x06
-        // Use !> from Prelude for conversion
-        let typeEntityHandle : EntityHandle = !> typeDefHandle
         let methodEntityHandle : EntityHandle = !> methodDefHandle
-
-        // Add to EncMap in known correct order (TypeDef < MethodDef)
-        metadataBuilder.AddEncMapEntry(typeEntityHandle)
-        metadataBuilder.AddEncMapEntry(methodEntityHandle)
-
-        // Add EncLog entries, mirroring the EncMap entries, using Default operation
-        metadataBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default)
-        metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
         
+        // Create Standalone Signature for empty locals
+        let emptyLocalsBlob = metadataBuilder.GetOrAddBlob([| 0x07uy; 0x00uy |]) 
+        let sigHandle = metadataBuilder.AddStandaloneSignature(emptyLocalsBlob)
+        let sigEntityHandle : EntityHandle = !> sigHandle
+
+        // Add EncMap entries (MethodDef and StandAloneSig only) in known correct order
+        metadataBuilder.AddEncMapEntry(methodEntityHandle)
+        metadataBuilder.AddEncMapEntry(sigEntityHandle)
+
+        // Add EncLog entries (MethodDef and StandAloneSig only) using Default operation
+        metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
+        metadataBuilder.AddEncLogEntry(sigEntityHandle, EditAndContinueOperation.Default)
+
         // Create and serialize the metadata using MetadataRootBuilder
         let metadataBytes = BlobBuilder()
         let rootBuilder = MetadataRootBuilder(metadataBuilder)

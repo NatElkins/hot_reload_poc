@@ -16,6 +16,10 @@ open System.Runtime.CompilerServices
 #nowarn FS3261
 
 module HotReloadTest =
+    /// Helper to convert byte array to hex string
+    let private bytesToHex (bytes: byte[]) =
+        System.BitConverter.ToString(bytes).Replace("-", "")
+
     /// Create a stable location for delta files
     let deltaDir = 
         Environment.CurrentDirectory
@@ -426,7 +430,24 @@ let getValue() = {0}
                         printfn "  IL delta is empty"
                     
                     printfn "[HotReloadTest] Delta files written to: %s" deltaDir
-                    printfn "[HotReloadTest] To analyze with mdv, run: cd \"%s\" && mdv /stats+ /assemblyRefs+ /il+ /md+" deltaDir
+
+                    // ---- START: Read and Print Delta Hex Dumps ----
+                    try
+                        // Print F# generated delta
+                        let fsMetaPath = Path.Combine(deltaDir, "1.meta") 
+                        let fsMetaBytes = File.ReadAllBytes(fsMetaPath)
+                        printfn "\n[HotReloadTest] F# Delta Hex (%s - %d bytes):\n%s\n" fsMetaPath fsMetaBytes.Length (bytesToHex fsMetaBytes)
+
+                        // Print C# generated delta
+                        let csMetaPath = "/Users/nat/Projects/ExpressionEvaluator/csharp_delta_test/bin/Debug/net10.0/1.meta" // Use absolute path
+                        if File.Exists(csMetaPath) then
+                            let csMetaBytes = File.ReadAllBytes(csMetaPath)
+                            printfn "[HotReloadTest] C# Delta Hex (%s - %d bytes):\n%s\n" csMetaPath csMetaBytes.Length (bytesToHex csMetaBytes)
+                        else
+                            printfn "[HotReloadTest] C# Delta File NOT FOUND at: %s" csMetaPath
+                    with ex ->
+                        printfn "[HotReloadTest] Error reading/printing delta hex: %s" ex.Message
+                    // ---- END: Read and Print Delta Hex Dumps ----
 
                     // Run mdv analysis on the delta files BEFORE attempting update
                     printfn "[HotReloadTest] Running mdv analysis BEFORE update attempt..."

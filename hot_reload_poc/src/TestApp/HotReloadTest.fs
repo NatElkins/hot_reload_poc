@@ -153,21 +153,20 @@ let getValue() = {0}
             Directory.CreateDirectory(tempDir) |> ignore
 
             // Define paths
-            let originalDll = Path.Combine(tempDir, "original.dll")
-            let modifiedDll = Path.Combine(tempDir, "modified.dll")
+            let baselineDll = Path.Combine(tempDir, "0.dll")
 
             // Create checker
             let checker = createChecker()
 
-            // Compile original version (42)
-            printfn "Compiling original version..."
-            let! originalResult = compileTestModule checker 42 originalDll
+            // Compile baseline version (42)
+            printfn "Compiling baseline version..."
+            let! originalResult = compileTestModule checker 42 baselineDll
             match originalResult with
-            | None -> return failwith "Failed to compile original version"
+            | None -> return failwith "Failed to compile baseline version"
             | Some (_, (typeName, methodName), _) ->
                 // Load using our custom context to enable hot reload
-                let originalAssembly = alc.LoadFromAssemblyPath(originalDll)
-                printfn "[HotReloadTest] Original assembly loaded:"
+                let originalAssembly = alc.LoadFromAssemblyPath(baselineDll)
+                printfn "[HotReloadTest] Baseline assembly loaded:"
                 printfn "  - Name: %s" originalAssembly.FullName
                 printfn "  - Location: %s" originalAssembly.Location
                 printfn "  - IsCollectible: %b" originalAssembly.IsCollectible
@@ -321,313 +320,238 @@ let getValue() = {0}
                 let originalValue = finalMethod.Invoke(null, [||]) :?> int
                 printfn "Original value: %d" originalValue
 
-                // Compile modified version (43)
-                printfn "Compiling modified version..."
-                let! modifiedResult = compileTestModule checker 43 modifiedDll
-                match modifiedResult with
-                | None -> return failwith "Failed to compile modified version"
-                | Some (_, modifiedToken, _) ->
-                    // Generate and apply deltas
-                    use originalReader = new PEReader(File.OpenRead(originalDll))
-                    use modifiedReader = new PEReader(File.OpenRead(modifiedDll))
+                // Generate and apply deltas directly based on desired state (return 43)
+                // No need for modifiedReader anymore
+                // use originalReader = new PEReader(File.OpenRead(baselineDll))
+                // use modifiedReader = new PEReader(File.OpenRead(modifiedDll))
+                
+                // Ensure we use the module ID from the original assembly
+                // This is critical for hot reload to work properly
+                let originalModuleId = originalAssembly.ManifestModule.ModuleVersionId
+                
+                // Create the delta generator
+                let generator = DeltaGenerator.create()
+                
+                // Generate the delta - target return value 43, pass isInvokeStub flag
+                printfn "[HotReloadTest] Generating delta to change return value to 43..."
+                let! delta = DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub
+                
+                match delta with
+                | None ->
+                    printfn "[HotReloadTest] Failed to generate delta"
+                    return ()
+                | Some delta ->
+                    printfn "[HotReloadTest] Generated delta:"
+                    printfn "  - Metadata: %d bytes" delta.MetadataDelta.Length
+                    printfn "  - IL: %d bytes" delta.ILDelta.Length
+                    printfn "  - PDB: %d bytes" delta.PdbDelta.Length
+                    printfn "  - Updated methods: %A" delta.UpdatedMethods
+                    printfn "  - Updated types: %A" delta.UpdatedTypes
                     
-                    // Ensure we use the module ID from the original assembly
-                    // This is critical for hot reload to work properly
-                    let originalModuleId = originalAssembly.ManifestModule.ModuleVersionId
+                    // Print detailed information about the deltas
+                    printfn "[HotReloadTest] Delta details:"
+                    printfn "  - Module ID: %A" delta.ModuleId
+                    let metadataBytes = delta.MetadataDelta.AsSpan().ToArray()
+                    printfn "  - Metadata delta bytes: %A" metadataBytes
+                    let ilBytes = delta.ILDelta.AsSpan().ToArray()
+                    printfn "  - IL delta bytes: %A" ilBytes
+                    let pdbBytes = delta.PdbDelta.AsSpan().ToArray()
+                    printfn "  - PDB delta bytes: %A" pdbBytes
                     
-                    // Create the delta generator
-                    let generator = DeltaGenerator.create()
+                    // Write the delta files to disk for inspection with mdv
+                    printfn "[HotReloadTest] Writing delta files to disk for mdv inspection..."
                     
-                    // Generate the delta - ensure we use originalModuleId
-                    let! delta = DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub
+                    // Baseline DLL (0.dll) is already in the correct location (baselineDll path)
+                    // No need to copy: File.Copy(baselineDll, Path.Combine(deltaDir, "0.dll"), true)
                     
-                    match delta with
-                    | None ->
-                        printfn "[HotReloadTest] Failed to generate delta"
-                        return ()
-                    | Some delta ->
-                        printfn "[HotReloadTest] Generated delta:"
-                        printfn "  - Metadata: %d bytes" delta.MetadataDelta.Length
-                        printfn "  - IL: %d bytes" delta.ILDelta.Length
-                        printfn "  - PDB: %d bytes" delta.PdbDelta.Length
-                        printfn "  - Updated methods: %A" delta.UpdatedMethods
-                        printfn "  - Updated types: %A" delta.UpdatedTypes
-                        
-                        // Print detailed information about the deltas
-                        printfn "[HotReloadTest] Delta details:"
-                        printfn "  - Module ID: %A" delta.ModuleId
-                        let metadataBytes = delta.MetadataDelta.AsSpan().ToArray()
-                        printfn "  - Metadata delta first 16 bytes: %A" (if metadataBytes.Length >= 16 then metadataBytes |> Array.take 16 else metadataBytes)
-                        let ilBytes = delta.ILDelta.AsSpan().ToArray()
-                        printfn "  - IL delta first 16 bytes: %A" (if ilBytes.Length >= 16 then ilBytes |> Array.take 16 else ilBytes)
-                        let pdbBytes = delta.PdbDelta.AsSpan().ToArray()
-                        printfn "  - PDB delta first 16 bytes: %A" (if pdbBytes.Length >= 16 then pdbBytes |> Array.take 16 else pdbBytes)
-                        
-                        // Write the delta files to disk for inspection with mdv
-                        printfn "[HotReloadTest] Writing delta files to disk for mdv inspection..."
-                        
-                        // Write the original DLL
-                        File.Copy(originalDll, Path.Combine(deltaDir, "0.dll"), true)
-                        
-                        // Write the delta files - use generation 1 for the delta
-                        // Using .meta extension as expected by mdv's auto-detection
-                        File.WriteAllBytes(Path.Combine(deltaDir, "1.meta"), metadataBytes)
-                        File.WriteAllBytes(Path.Combine(deltaDir, "1.il"), ilBytes)
-                        // Also keep the .md extension for direct inspection if needed
-                        File.WriteAllBytes(Path.Combine(deltaDir, "1.md"), metadataBytes)
-                        File.WriteAllBytes(Path.Combine(deltaDir, "1.pdb"), pdbBytes)
-                        
-                        // Analyze the IL delta in more detail
-                        printfn "[HotReloadTest] Detailed IL delta analysis:"
-                        printfn "  Hex dump of IL delta bytes: %s" (BitConverter.ToString(ilBytes))
-                        
-                        // Parse and display the IL delta in a human-readable form
-                        if ilBytes.Length > 0 then
-                            let tinyFormat = (ilBytes[0] &&& 0x03uy) = 0x02uy
-                            if tinyFormat then
-                                let codeSize = int (ilBytes[0] >>> 2)
-                                printfn "  IL format: Tiny (1-byte header)"
-                                printfn "  Code size from header: %d bytes" codeSize
-                                printfn "  Header byte: 0x%02X" ilBytes[0]
+                    // Write the delta files - use generation 1 for the delta
+                    // Using .meta extension as expected by mdv's auto-detection
+                    File.WriteAllBytes(Path.Combine(deltaDir, "1.meta"), metadataBytes)
+                    File.WriteAllBytes(Path.Combine(deltaDir, "1.il"), ilBytes)
+                    // Also keep the .md extension for direct inspection if needed - REMOVED based on user feedback
+                    // File.WriteAllBytes(Path.Combine(deltaDir, "1.md"), metadataBytes) 
+                    File.WriteAllBytes(Path.Combine(deltaDir, "1.pdb"), pdbBytes)
+                    
+                    // Analyze the IL delta in more detail
+                    printfn "[HotReloadTest] Detailed IL delta analysis:"
+                    printfn "  Hex dump of IL delta bytes: %s" (BitConverter.ToString(ilBytes))
+                    
+                    // Parse and display the IL delta in a human-readable form
+                    if ilBytes.Length > 0 then
+                        let tinyFormat = (ilBytes[0] &&& 0x03uy) = 0x02uy
+                        if tinyFormat then
+                            let codeSize = int (ilBytes[0] >>> 2)
+                            printfn "  IL format: Tiny (1-byte header)"
+                            printfn "  Code size from header: %d bytes" codeSize
+                            printfn "  Header byte: 0x%02X" ilBytes[0]
+                            
+                            // Display the actual IL instructions
+                            printfn "  IL Instructions:"
+                            let mutable i = 1 // Skip header
+                            while i < ilBytes.Length do
+                                match ilBytes[i] with
+                                | 0x16uy -> printfn "    IL_%04X: ldc.i4.0" (i-1)
+                                | 0x17uy -> printfn "    IL_%04X: ldc.i4.1" (i-1)
+                                | 0x18uy -> printfn "    IL_%04X: ldc.i4.2" (i-1)
+                                | 0x19uy -> printfn "    IL_%04X: ldc.i4.3" (i-1)
+                                | 0x1Auy -> printfn "    IL_%04X: ldc.i4.4" (i-1)
+                                | 0x1Buy -> printfn "    IL_%04X: ldc.i4.5" (i-1)
+                                | 0x1Cuy -> printfn "    IL_%04X: ldc.i4.6" (i-1)
+                                | 0x1Duy -> printfn "    IL_%04X: ldc.i4.7" (i-1)
+                                | 0x1Euy -> printfn "    IL_%04X: ldc.i4.8" (i-1)
+                                | 0x1Fuy -> 
+                                    if i+1 < ilBytes.Length then
+                                        printfn "    IL_%04X: ldc.i4.s %d" (i-1) (sbyte ilBytes[i+1])
+                                        i <- i + 1
+                                    else
+                                        printfn "    IL_%04X: ldc.i4.s <incomplete>" (i-1)
+                                | 0x20uy -> 
+                                    if i+4 < ilBytes.Length then
+                                        let value = 
+                                            ilBytes[i+1] ||| 
+                                            (ilBytes[i+2] <<< 8) ||| 
+                                            (ilBytes[i+3] <<< 16) ||| 
+                                            (ilBytes[i+4] <<< 24)
+                                        printfn "    IL_%04X: ldc.i4 %d" (i-1) value
+                                        i <- i + 4
+                                    else
+                                        printfn "    IL_%04X: ldc.i4 <incomplete>" (i-1)
+                                | 0x2Auy -> printfn "    IL_%04X: ret" (i-1)
+                                | opcode -> printfn "    IL_%04X: Unknown opcode 0x%02X" (i-1) opcode
                                 
-                                // Display the actual IL instructions
-                                printfn "  IL Instructions:"
-                                let mutable i = 1 // Skip header
-                                while i < ilBytes.Length do
-                                    match ilBytes[i] with
-                                    | 0x16uy -> printfn "    IL_%04X: ldc.i4.0" (i-1)
-                                    | 0x17uy -> printfn "    IL_%04X: ldc.i4.1" (i-1)
-                                    | 0x18uy -> printfn "    IL_%04X: ldc.i4.2" (i-1)
-                                    | 0x19uy -> printfn "    IL_%04X: ldc.i4.3" (i-1)
-                                    | 0x1Auy -> printfn "    IL_%04X: ldc.i4.4" (i-1)
-                                    | 0x1Buy -> printfn "    IL_%04X: ldc.i4.5" (i-1)
-                                    | 0x1Cuy -> printfn "    IL_%04X: ldc.i4.6" (i-1)
-                                    | 0x1Duy -> printfn "    IL_%04X: ldc.i4.7" (i-1)
-                                    | 0x1Euy -> printfn "    IL_%04X: ldc.i4.8" (i-1)
-                                    | 0x1Fuy -> 
-                                        if i+1 < ilBytes.Length then
-                                            printfn "    IL_%04X: ldc.i4.s %d" (i-1) (sbyte ilBytes[i+1])
-                                            i <- i + 1
-                                        else
-                                            printfn "    IL_%04X: ldc.i4.s <incomplete>" (i-1)
-                                    | 0x20uy -> 
-                                        if i+4 < ilBytes.Length then
-                                            let value = 
-                                                ilBytes[i+1] ||| 
-                                                (ilBytes[i+2] <<< 8) ||| 
-                                                (ilBytes[i+3] <<< 16) ||| 
-                                                (ilBytes[i+4] <<< 24)
-                                            printfn "    IL_%04X: ldc.i4 %d" (i-1) value
-                                            i <- i + 4
-                                        else
-                                            printfn "    IL_%04X: ldc.i4 <incomplete>" (i-1)
-                                    | 0x2Auy -> printfn "    IL_%04X: ret" (i-1)
-                                    | opcode -> printfn "    IL_%04X: Unknown opcode 0x%02X" (i-1) opcode
-                                    
-                                    i <- i + 1
-                            else
-                                printfn "  IL format: Not tiny format (first byte: 0x%02X)" ilBytes[0]
+                                i <- i + 1
                         else
-                            printfn "  IL delta is empty"
+                            printfn "  IL format: Not tiny format (first byte: 0x%02X)" ilBytes[0]
+                    else
+                        printfn "  IL delta is empty"
+                    
+                    printfn "[HotReloadTest] Delta files written to: %s" deltaDir
+                    printfn "[HotReloadTest] To analyze with mdv, run: cd \"%s\" && mdv /stats+ /assemblyRefs+ /il+ /md+" deltaDir
+                    // printfn "[HotReloadTest] Or with explicit parameters: mdv /g:1.meta;1.il 0.dll" // Alternative mdv command
+                    
+                    try
+                        printfn "[HotReloadTest] Attempting to apply update..."
+                        printfn "  - Assembly: %s" originalAssembly.FullName
+                        printfn "  - Assembly location: %s" originalAssembly.Location
+                        printfn "  - IsCollectible: %b" originalAssembly.IsCollectible
+                        printfn "  - IsDynamic: %b" originalAssembly.IsDynamic
+                        printfn "  - IsFullyTrusted: %b" originalAssembly.IsFullyTrusted
+                        printfn "  - ReflectionOnly: %b" originalAssembly.ReflectionOnly
+                        printfn "  - SecurityRuleSet: %A" originalAssembly.SecurityRuleSet
+                        printfn "  - Module version ID: %A" originalAssembly.ManifestModule.ModuleVersionId
                         
-                        printfn "[HotReloadTest] Delta files written to: %s" deltaDir
-                        printfn "[HotReloadTest] To analyze with mdv, run: cd \"%s\" && mdv 0.dll" deltaDir
-                        printfn "[HotReloadTest] Or with explicit parameters: mdv /g:1.meta;1.il 0.dll"
+                        // Validate the deltas before applying
+                        printfn "[HotReloadTest] Validating deltas before applying..."
+                        printfn "  - Metadata delta size: %d" delta.MetadataDelta.Length
+                        printfn "  - IL delta size: %d" delta.ILDelta.Length
+                        printfn "  - PDB delta size: %d" delta.PdbDelta.Length
+                        
+                        // Check if metadata updates are supported
+                        printfn "[HotReloadTest] Checking metadata update support..."
+                        printfn "  - MetadataUpdater.IsSupported: %b" MetadataUpdater.IsSupported
+                        let modifiableAssemblies = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+                        printfn "  - DOTNET_MODIFIABLE_ASSEMBLIES: %s" (if modifiableAssemblies = null then "not set" else modifiableAssemblies)
+                        
+                        // Ensure the environment is configured for EnC
+                        if not MetadataUpdater.IsSupported then
+                            printfn "[HotReloadTest] Error: Metadata updates are not supported in this environment"
+                            return ()
+                        
+                        if modifiableAssemblies = null then
+                            printfn "[HotReloadTest] Warning: DOTNET_MODIFIABLE_ASSEMBLIES is not set. This may prevent updates from working."
+                        
+                        // Apply the update
+                        MetadataUpdater.ApplyUpdate(
+                            originalAssembly,
+                            delta.MetadataDelta.AsSpan(),
+                            delta.ILDelta.AsSpan(),
+                            delta.PdbDelta.AsSpan()
+                        )
+                        printfn "[HotReloadTest] Update applied successfully"
+                        
+                        // Run mdv analysis on the delta files
+                        printfn "[HotReloadTest] Running mdv analysis..."
+                        
+                        // Use mdv's auto-discovery feature in the current directory with detailed flags
+                        let startInfo = ProcessStartInfo(
+                            FileName = "mdv",
+                            Arguments = "0.dll /g /stats+ /assemblyRefs+ /il+ /md+", // Added detailed flags
+                            WorkingDirectory = deltaDir, // Set working directory to deltaDir
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        )
                         
                         try
-                            printfn "[HotReloadTest] Attempting to apply update..."
-                            printfn "  - Assembly: %s" originalAssembly.FullName
-                            printfn "  - Assembly location: %s" originalAssembly.Location
-                            printfn "  - IsCollectible: %b" originalAssembly.IsCollectible
-                            printfn "  - IsDynamic: %b" originalAssembly.IsDynamic
-                            printfn "  - IsFullyTrusted: %b" originalAssembly.IsFullyTrusted
-                            printfn "  - ReflectionOnly: %b" originalAssembly.ReflectionOnly
-                            printfn "  - SecurityRuleSet: %A" originalAssembly.SecurityRuleSet
-                            printfn "  - Module version ID: %A" originalAssembly.ManifestModule.ModuleVersionId
-                            
-                            // Validate the deltas before applying
-                            printfn "[HotReloadTest] Validating deltas before applying..."
-                            printfn "  - Metadata delta size: %d" delta.MetadataDelta.Length
-                            printfn "  - IL delta size: %d" delta.ILDelta.Length
-                            printfn "  - PDB delta size: %d" delta.PdbDelta.Length
-                            
-                            // Check if metadata updates are supported
-                            printfn "[HotReloadTest] Checking metadata update support..."
-                            printfn "  - MetadataUpdater.IsSupported: %b" MetadataUpdater.IsSupported
-                            let modifiableAssemblies = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
-                            printfn "  - DOTNET_MODIFIABLE_ASSEMBLIES: %s" (if modifiableAssemblies = null then "not set" else modifiableAssemblies)
-                            
-                            // Ensure the environment is configured for EnC
-                            if not MetadataUpdater.IsSupported then
-                                printfn "[HotReloadTest] Error: Metadata updates are not supported in this environment"
-                                return ()
-                            
-                            if modifiableAssemblies = null then
-                                printfn "[HotReloadTest] Warning: DOTNET_MODIFIABLE_ASSEMBLIES is not set. This may prevent updates from working."
-                            
-                            // Apply the update
-                            MetadataUpdater.ApplyUpdate(
-                                originalAssembly,
-                                delta.MetadataDelta.AsSpan(),
-                                delta.ILDelta.AsSpan(),
-                                delta.PdbDelta.AsSpan()
-                            )
-                            printfn "[HotReloadTest] Update applied successfully"
-                            
-                            // Run mdv analysis on the delta files
-                            printfn "[HotReloadTest] Running mdv analysis..."
-                            
-                            // Use mdv's auto-discovery feature in the current directory
-                            let startInfo = ProcessStartInfo(
-                                FileName = "mdv",
-                                Arguments = "", // No arguments needed for auto-discovery
-                                WorkingDirectory = deltaDir, // Set working directory to deltaDir
-                                RedirectStandardOutput = true,
-                                UseShellExecute = false,
-                                CreateNoWindow = true
-                            )
-                            
-                            try
-                                use mdvProcess = Process.Start(startInfo)
-                                let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
-                                mdvProcess.WaitForExit()
-                                printfn "[HotReloadTest] mdv output:\n%s" mdvOutput
-                            with ex ->
-                                printfn "[HotReloadTest] Failed to run mdv: %s" ex.Message
-                            
-                            // Also run ilspycmd on both versions to compare IL
-                            printfn "[HotReloadTest] Running ilspycmd for IL analysis..."
-                            
-                            // Function to run ilspycmd and return output
-                            let runILSpyCmdAndSave (dllPath: string) (outputPath: string) =
-                                let startInfo = ProcessStartInfo(
-                                    FileName = "ilspycmd",
-                                    Arguments = dllPath,
-                                    RedirectStandardOutput = true,
-                                    UseShellExecute = false,
-                                    CreateNoWindow = true
-                                )
-                                
-                                try
-                                    use proc = Process.Start(startInfo)
-                                    let output = proc.StandardOutput.ReadToEnd()
-                                    proc.WaitForExit()
-                                    
-                                    // Save output to file
-                                    File.WriteAllText(outputPath, output)
-                                    printfn "[HotReloadTest] Saved IL analysis for %s to %s" 
-                                        (Path.GetFileName(dllPath)) outputPath
-                                    
-                                    // Return true if successful
-                                    true
-                                with ex ->
-                                    printfn "[HotReloadTest] Failed to run ilspycmd on %s: %s" 
-                                        (Path.GetFileName(dllPath)) ex.Message
-                                    false
-                            
-                            // Analyze original DLL
-                            let originalILPath = Path.Combine(deltaDir, "original.il")
-                            let originalSuccess = runILSpyCmdAndSave originalDll originalILPath
-                            
-                            // Analyze modified DLL
-                            let modifiedILPath = Path.Combine(deltaDir, "modified.il")
-                            let modifiedSuccess = runILSpyCmdAndSave modifiedDll modifiedILPath
-                            
-                            // Compare the IL files if both were analyzed successfully
-                            if originalSuccess && modifiedSuccess then
-                                printfn "[HotReloadTest] Comparing IL differences between original and modified assemblies..."
-                                
-                                // Run diff command through Process.Start
-                                let diffStartInfo = ProcessStartInfo(
-                                    FileName = "diff",
-                                    Arguments = sprintf "-u \"%s\" \"%s\"" originalILPath modifiedILPath,
-                                    RedirectStandardOutput = true,
-                                    UseShellExecute = false,
-                                    CreateNoWindow = true
-                                )
-                                
-                                try
-                                    use diffProcess = Process.Start(diffStartInfo)
-                                    let diffOutput = diffProcess.StandardOutput.ReadToEnd()
-                                    diffProcess.WaitForExit()
-                                    
-                                    // Save diff output
-                                    let diffPath = Path.Combine(deltaDir, "il_diff.txt")
-                                    File.WriteAllText(diffPath, diffOutput)
-                                    
-                                    if diffOutput.Trim().Length > 0 then
-                                        printfn "[HotReloadTest] IL differences found. See %s for details." diffPath
-                                    else
-                                        printfn "[HotReloadTest] No IL differences found between original and modified assemblies."
-                                with ex ->
-                                    printfn "[HotReloadTest] Failed to compare IL files: %s" ex.Message
-                            
-                            // Dump more information about the method after the update
-                            try
-                                // Get the method descriptor info
-                                printfn "[HotReloadTest] Method information after update:"
-                                printfn "  - Method display name: %s" finalMethod.Name
-                                printfn "  - Method declaring type: %s" finalMethod.DeclaringType.FullName
-                                printfn "  - Method token: 0x%08X" finalMethod.MetadataToken
-                                printfn "  - Method attributes: %A" finalMethod.Attributes
-                                printfn "  - Method implementation flags: %A" finalMethod.MethodImplementationFlags 
-                                printfn "  - Method return type: %s" finalMethod.ReturnType.FullName
-                                
-                                // Get module information
-                                let module' = finalMethod.Module
-                                printfn "  - Module: %s" module'.Name
-                                printfn "  - Module version ID: %A" module'.ModuleVersionId
-                                
-                                // Get the entry point (code address)
-                                printfn "  - Method handle: %A" finalMethod.MethodHandle
-                                // Try to get function pointer
-                                try
-                                    let funcPtr = finalMethod.MethodHandle.GetFunctionPointer()
-                                    let ptrValue = funcPtr.ToInt64()
-                                    printfn "  - Function pointer: 0x%016X" ptrValue
-                                with ex ->
-                                    printfn "  - Failed to get function pointer: %s" ex.Message
-                            with ex ->
-                                printfn "[HotReloadTest] Failed to get additional method info: %s" ex.Message
-                            
-                            // Inspect the IL of the method after applying the update
-                            printfn "[HotReloadTest] Inspecting method IL after update using MethodBody.GetILAsByteArray():"
-                            let methodBody = finalMethod.GetMethodBody()
-                            if methodBody <> null then
-                                let ilBytes = methodBody.GetILAsByteArray()
-                                printfn "  - IL bytes after update: %A" ilBytes
-                                if ilBytes <> null && ilBytes.Length > 0 then
-                                    printfn "  - IL hex after update: %s" (BitConverter.ToString(ilBytes))
-                                    // Try to parse the IL
-                                    let tinyFormat = (ilBytes[0] &&& 0x03uy) = 0x02uy
-                                    if tinyFormat then
-                                        let codeSize = int (ilBytes[0] >>> 2)
-                                        printfn "  - IL format: Tiny (1-byte header)"
-                                        printfn "  - Code size from header: %d bytes" codeSize
-                                    else
-                                        printfn "  - IL format: Fat header or not a method body"
-                                else
-                                    printfn "  - IL bytes are null or empty after update"
-                            else
-                                printfn "  - Could not get method body"
-                            
-                            // Verify the update
-                            let newValue = finalMethod.Invoke(null, [||]) :?> int
-                            printfn "New value after update: %d" newValue
-                            
-                            if newValue = 43 then
-                                printfn "[HotReloadTest] Hot reload success! 🎉"
-                            else
-                                printfn "[HotReloadTest] Value didn't change as expected! Got %d, expected 43" newValue
+                            use mdvProcess = Process.Start(startInfo)
+                            let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
+                            mdvProcess.WaitForExit()
+                            printfn "[HotReloadTest] mdv output:\n%s" mdvOutput
                         with ex ->
-                            printfn "[HotReloadTest] Failed to apply update: %A" ex
-                            printfn "[HotReloadTest] Exception details:"
-                            printfn "  - Message: %s" ex.Message
-                            printfn "  - Stack trace: %s" ex.StackTrace
-                            if ex.InnerException <> null then
-                                printfn "  - Inner exception: %A" ex.InnerException
+                            printfn "[HotReloadTest] Failed to run mdv: %s" ex.Message
                         
-                        // Don't clean up so we can inspect the files
-                        // try Directory.Delete(tempDir, true) with _ -> ()
-                        return ()
-        } 
+                        // Dump more information about the method after the update
+                        try
+                            // Get the method descriptor info
+                            printfn "[HotReloadTest] Method information after update:"
+                            printfn "  - Method display name: %s" finalMethod.Name
+                            printfn "  - Method declaring type: %s" finalMethod.DeclaringType.FullName
+                            printfn "  - Method token: 0x%08X" finalMethod.MetadataToken
+                            printfn "  - Method attributes: %A" finalMethod.Attributes
+                            printfn "  - Method implementation flags: %A" finalMethod.MethodImplementationFlags 
+                            printfn "  - Method return type: %s" finalMethod.ReturnType.FullName
+                            
+                            // Get module information
+                            let module' = finalMethod.Module
+                            printfn "  - Module: %s" module'.Name
+                            printfn "  - Module version ID: %A" module'.ModuleVersionId
+                            
+                            // Get the entry point (code address)
+                            printfn "  - Method handle: %A" finalMethod.MethodHandle
+                            // Try to get function pointer
+                            try
+                                let funcPtr = finalMethod.MethodHandle.GetFunctionPointer()
+                                let ptrValue = funcPtr.ToInt64()
+                                printfn "  - Function pointer: 0x%016X" ptrValue
+                            with ex ->
+                                printfn "  - Failed to get function pointer: %s" ex.Message
+                        with ex ->
+                            printfn "[HotReloadTest] Failed to get additional method info: %s" ex.Message
+                        
+                        // Inspect the IL of the method after applying the update
+                        printfn "[HotReloadTest] Inspecting method IL after update using MethodBody.GetILAsByteArray():"
+                        let methodBody = finalMethod.GetMethodBody()
+                        if methodBody <> null then
+                            let ilBytes = methodBody.GetILAsByteArray()
+                            printfn "  - IL bytes after update: %A" ilBytes
+                            if ilBytes <> null && ilBytes.Length > 0 then
+                                printfn "  - IL hex after update: %s" (BitConverter.ToString(ilBytes))
+                                // Try to parse the IL
+                                let tinyFormat = (ilBytes[0] &&& 0x03uy) = 0x02uy
+                                if tinyFormat then
+                                    let codeSize = int (ilBytes[0] >>> 2)
+                                    printfn "  - IL format: Tiny (1-byte header)"
+                                    printfn "  - Code size from header: %d bytes" codeSize
+                                else
+                                    printfn "  - IL format: Fat header or not a method body"
+                            else
+                                printfn "  - IL bytes are null or empty after update"
+                        else
+                            printfn "  - Could not get method body"
+                        
+                        // Verify the update
+                        let newValue = finalMethod.Invoke(null, [||]) :?> int
+                        printfn "New value after update: %d" newValue
+                        
+                        if newValue = 43 then
+                            printfn "[HotReloadTest] Hot reload success! 🎉"
+                        else
+                            printfn "[HotReloadTest] Value didn't change as expected! Got %d, expected 43" newValue
+                    with ex ->
+                        printfn "[HotReloadTest] Failed to apply update: %A" ex
+                        printfn "[HotReloadTest] Exception details:"
+                        printfn "  - Message: %s" ex.Message
+                        printfn "  - Stack trace: %s" ex.StackTrace
+                        if ex.InnerException <> null then
+                            printfn "  - Inner exception: %A" ex.InnerException
+            } 

@@ -79,93 +79,96 @@ module DeltaGenerator =
     /// Generates metadata delta for a method update.
     /// </summary>
     let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
-        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X (Restoring Module+TypeDef+MethodDef + Refs + MethodSig EnC)" methodToken
+        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X (Attempt #16: Att#13 Config + Extra GUIDs)" methodToken
         printfn "[DeltaGenerator] Declaring type token: 0x%08X" declaringTypeToken
         printfn "[DeltaGenerator] Using module ID: %A" moduleId
         
         let metadataBuilder = MetadataBuilder()
 
         // 1. Add Module definition 
-        let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll")
+        let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll") 
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let zeroGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Empty)
         let _ = metadataBuilder.AddModule(1, moduleNameHandle, mvidHandle, zeroGuidHandle, zeroGuidHandle)
 
-        // 2. Add essential references (BEFORE TypeDef)
+        // 2. Add essential references (BEFORE TypeDef) 
         let systemRuntimeAssemblyName = metadataBuilder.GetOrAddString("System.Runtime")
         let systemRuntimeVersion = System.Version(10, 0, 0, 0) 
         let ecmaPublicKeyTokenBlob = metadataBuilder.GetOrAddBlob([| 0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy |])
         let systemRuntimeAssemblyRef = metadataBuilder.AddAssemblyReference(
-            name = systemRuntimeAssemblyName, 
-            version = systemRuntimeVersion, 
-            culture = metadataBuilder.GetOrAddString(""), 
-            publicKeyOrToken = ecmaPublicKeyTokenBlob,
-            flags = AssemblyFlags.PublicKey, 
-            hashValue = BlobHandle() 
+            name = systemRuntimeAssemblyName, version = systemRuntimeVersion, culture = metadataBuilder.GetOrAddString(""), 
+            publicKeyOrToken = ecmaPublicKeyTokenBlob, flags = AssemblyFlags.PublicKey, hashValue = BlobHandle()
         )
         let systemNamespace = metadataBuilder.GetOrAddString("System")
         let objectTypeName = metadataBuilder.GetOrAddString("Object")
         let objectTypeRef = metadataBuilder.AddTypeReference(systemRuntimeAssemblyRef, systemNamespace, objectTypeName) 
         let int32TypeName = metadataBuilder.GetOrAddString("Int32")
         let _int32TypeRef = metadataBuilder.AddTypeReference(systemRuntimeAssemblyRef, systemNamespace, int32TypeName) 
+        // Add MemberRef for System.Object..ctor() 
+        let ctorName = metadataBuilder.GetOrAddString(".ctor")
+        let ctorSigBuilder = BlobBuilder()
+        let encodeReturn (ret: ReturnTypeEncoder) : unit = ret.Void()
+        let encodeParams (pars: ParametersEncoder) : unit = ()
+        BlobEncoder(ctorSigBuilder).MethodSignature(isInstanceMethod = true).Parameters(0, System.Action<ReturnTypeEncoder> encodeReturn, System.Action<ParametersEncoder> encodeParams)
+        let ctorSigBlob = metadataBuilder.GetOrAddBlob(ctorSigBuilder)
+        let _objectCtorMemberRef = metadataBuilder.AddMemberReference(objectTypeRef, ctorName, ctorSigBlob)
 
-        // 3. Add TypeDef definition (AFTER References)
+        // 3. Add extra GUIDs found in C# delta
+        let _unknownGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Parse("86d3b3ff-8f3c-44d6-bdea-dc76b2f7c2d1")) // Reversed unknown GUID
+        // Construct ECMA Key GUID manually for GetOrAddGuid
+        let ecmaKeyGuidBytes = [| 0x7Fuy; 0x5Fuy; 0x3Fuy; 0xB0uy; // First 4 bytes reversed
+                                  0xD5uy; 0x11uy; // Next 2 reversed
+                                  0x3Auy; 0x0Auy; // Next 2 reversed
+                                  0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy |] // Remaining bytes (pad with 0?)
+        let _ecmaKeyGuid = metadataBuilder.GetOrAddGuid(Guid(ecmaKeyGuidBytes))
+
+        // 4. Add TypeDef definition (AFTER References)
         let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
         let emptyFieldHandle = FieldDefinitionHandle()
         let emptyMethodHandle = MethodDefinitionHandle()
         metadataBuilder.AddTypeDefinition(
-            // Attributes from baseline mdv: Public, Abstract, Sealed (0x181)
-            TypeAttributes.Public ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed, 
-            metadataBuilder.GetOrAddString("SimpleTest"),
-            metadataBuilder.GetOrAddString(""), // Empty namespace
-            objectTypeRef, // Use the handle created above for System.Object
+            TypeAttributes.Public, // Using simplified flags from Att #11
+            metadataBuilder.GetOrAddString("SimpleTest"), // Use the type name from the test template
+            metadataBuilder.GetOrAddString("TestApp"), // Use the namespace from the test template
+            objectTypeRef, 
             emptyFieldHandle, 
             emptyMethodHandle 
         ) |> ignore
         
-        // 4. Add MethodDef definition (Restoring this)
+        // 5. Add MethodDef definition 
         let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
         let emptyParamHandle = ParameterHandle()
-        // Get the handle for the method signature blob we generated earlier
         let methodSignatureBlobHandle = metadataBuilder.GetOrAddBlob(generateMethodSignature())
-        metadataBuilder.AddMethodDefinition(
-            MethodAttributes.Public ||| MethodAttributes.Static, 
+        let addedMethodDefHandle = metadataBuilder.AddMethodDefinition(
+            MethodAttributes.Public ||| MethodAttributes.Static ||| MethodAttributes.HideBySig, // Using flags from Att #11
             MethodImplAttributes.IL,
-            metadataBuilder.GetOrAddString("getValue"),
-            methodSignatureBlobHandle, // Use the handle for the signature blob
-            0, // RVA - filled by runtime
-            emptyParamHandle // No parameters
-        ) |> ignore
+            metadataBuilder.GetOrAddString("GetValue"), 
+            methodSignatureBlobHandle, 
+            0, 
+            emptyParamHandle 
+        )
 
-        // 5. Get MethodDef handle for EnC tables
-        let methodEntityHandle : EntityHandle = !> methodDefHandle // Use the handle from AddMethodDefinition
+        // 6. Get Handles for EnC tables (TypeDef and MethodDef handles - From Attempt #4/11/13)
+        let typeEntityHandle : EntityHandle = !> typeDefHandle
+        let methodEntityHandle : EntityHandle = !> addedMethodDefHandle // Use handle from AddMethodDefinition
         
-        // 6. Create AND Add Standalone Signature for empty locals (Reverting to explicit add)
-        let emptyLocalsBlob = metadataBuilder.GetOrAddBlob([| 0x07uy; 0x00uy |]) 
-        let sigHandle = metadataBuilder.AddStandaloneSignature(emptyLocalsBlob) // Use the added handle
-        let sigEntityHandle : EntityHandle = !> sigHandle
-
-        // 7. Add EncMap entries (MethodDef and StandAloneSig only) in known correct order
+        // 7. Add EncMap entries (TypeDef and MethodDef ONLY)
+        metadataBuilder.AddEncMapEntry(typeEntityHandle)
         metadataBuilder.AddEncMapEntry(methodEntityHandle)
-        metadataBuilder.AddEncMapEntry(sigEntityHandle)
 
-        // 8. Add EncLog entries (MethodDef and StandAloneSig only) using Default operation
+        // 8. Add EncLog entries (TypeDef and MethodDef ONLY) using Default operation
+        metadataBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default)
         metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
-        metadataBuilder.AddEncLogEntry(sigEntityHandle, EditAndContinueOperation.Default)
 
         // 9. Create and serialize the metadata using MetadataRootBuilder
         let metadataBytes = BlobBuilder()
         let rootBuilder = MetadataRootBuilder(metadataBuilder)
-        
-        // Serialize with the correct generation (1) for deltas
-        rootBuilder.Serialize(metadataBytes, 1, 0)
-        
-        // Convert to immutable array and return
-        let deltaBytes = metadataBytes.ToArray()
+        rootBuilder.Serialize(metadataBytes, 1, 0) // Using previous params 
+        let deltaBytes = metadataBytes.ToImmutableArray() 
         printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" deltaBytes.Length
         printfn "[DeltaGenerator] Metadata bytes first 16 bytes: %A" 
-            (if deltaBytes.Length >= 16 then deltaBytes |> Array.take 16 else deltaBytes)
-        ImmutableArray.CreateRange(deltaBytes)
+            (if deltaBytes.Length >= 16 then deltaBytes.AsSpan().Slice(0, 16).ToArray() else deltaBytes.AsSpan().ToArray())
+        deltaBytes 
 
     /// <summary>
     /// Generates IL delta for a method update.
@@ -279,27 +282,29 @@ module DeltaGenerator =
     /// <summary>
     /// Main entry point for generating deltas.
     /// </summary>
-    let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) (isInvokeStub: bool) =
+    let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) (isInvokeStub: bool) (typeName: string) (methodName: string) =
         async {
             printfn "[DeltaGenerator] ===== Starting delta generation ====="
             printfn "[DeltaGenerator] Assembly: %s" assembly.FullName
             printfn "[DeltaGenerator] Assembly location: %s" assembly.Location
             printfn "[DeltaGenerator] Module ID: %A" assembly.ManifestModule.ModuleVersionId
             printfn "[DeltaGenerator] Target return value: %d" returnValue
+            printfn "[DeltaGenerator] Target type: %s" typeName
+            printfn "[DeltaGenerator] Target method: %s" methodName
             printfn "[DeltaGenerator] Using InvokeStub method: %b" isInvokeStub
             
             // Find the method to update
-            printfn "[DeltaGenerator] Looking for SimpleTest type..."
+            printfn "[DeltaGenerator] Looking for %s type..." typeName
             
             // Get the regular method and also look for InvokeStub methods
             let methodToUpdate, invokeStubMethods = 
-                let type' = assembly.GetType("SimpleTest")
+                let type' = assembly.GetType(typeName)
                 if type' = null then 
-                    printfn "[DeltaGenerator] Error: Could not find SimpleTest type"
+                    printfn "[DeltaGenerator] Error: Could not find %s type" typeName
                     null, [||]
                 else 
-                    printfn "[DeltaGenerator] Found SimpleTest type, looking for getValue method..."
-                    let regularMethod = type'.GetMethod("getValue", BindingFlags.Public ||| BindingFlags.Static)
+                    printfn "[DeltaGenerator] Found %s type, looking for %s method..." typeName methodName
+                    let regularMethod = type'.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
                     
                     // Look for F# InvokeStub methods that might be related
                     printfn "[DeltaGenerator] Looking for F# invoke stub methods..."
@@ -309,11 +314,11 @@ module DeltaGenerator =
                             t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance)
                             |> Array.filter (fun m -> 
                                 // Look for methods with broader criteria that might be invoke stubs:
-                                // 1. Contains the method name (getValue)
+                                // 1. Contains the method name (methodName)
                                 // 2. Contains "InvokeStub" in the type or method name
                                 // 3. Type name starts with "InvokeStub" or contains patterns like "<StartupCode"
                                 // 4. From a compiler-generated type
-                                let methodNameMatches = m.Name.Contains("getValue") || m.Name.Contains("get_") 
+                                let methodNameMatches = m.Name.Contains(methodName) || m.Name.Contains("get_") 
                                 let typeNameSuggestsStub = 
                                     t.Name.Contains("InvokeStub") || 
                                     t.FullName.Contains("InvokeStub") ||
@@ -348,7 +353,7 @@ module DeltaGenerator =
             
             match methodToUpdate with
             | null -> 
-                printfn "[DeltaGenerator] Error: Could not find getValue method"
+                printfn "[DeltaGenerator] Error: Could not find %s method" methodName
                 return None
             | method' ->
                 let methodToken = method'.MetadataToken

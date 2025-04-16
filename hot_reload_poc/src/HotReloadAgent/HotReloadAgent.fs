@@ -10,12 +10,15 @@ type HotReloadAgent = {
     DeltaGenerator: DeltaGenerator
     TargetAssembly: Assembly
     CurrentValue: int
+    TargetTypeName: string
+    TargetMethodName: string
 }
 
 module HotReloadAgent =
-    let create (targetAssembly: Assembly) (initialValue: int) =
+    let create (targetAssembly: Assembly) (initialValue: int) (targetTypeName: string) (targetMethodName: string) =
         printfn "[HotReloadAgent] Creating agent for assembly: %s" targetAssembly.FullName
         printfn "[HotReloadAgent] Initial value: %d" initialValue
+        printfn "[HotReloadAgent] Target: %s::%s" targetTypeName targetMethodName
         
         let deltaGenerator = DeltaGenerator.create()
         
@@ -23,12 +26,14 @@ module HotReloadAgent =
             DeltaGenerator = deltaGenerator
             TargetAssembly = targetAssembly
             CurrentValue = initialValue
+            TargetTypeName = targetTypeName
+            TargetMethodName = targetMethodName
         }
 
     let updateValue (agent: HotReloadAgent) (newValue: int) =
         async {
             printfn "[HotReloadAgent] Updating value from %d to %d" agent.CurrentValue newValue
-            match! DeltaGenerator.generateDelta agent.DeltaGenerator agent.TargetAssembly newValue false with
+            match! DeltaGenerator.generateDelta agent.DeltaGenerator agent.TargetAssembly newValue false agent.TargetTypeName agent.TargetMethodName with
             | Some delta ->
                 try
                     printfn "[HotReloadAgent] Applying update to assembly..."

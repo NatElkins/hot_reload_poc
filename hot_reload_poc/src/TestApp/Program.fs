@@ -32,7 +32,7 @@ module Program =
             let assembly = alc.LoadFromAssemblyPath(Assembly.GetExecutingAssembly().Location)
             
             // Create the hot reload agent
-            let agent = HotReloadAgent.create assembly 42
+            let agent = HotReloadAgent.create assembly 42 "TestApp.SimpleTest" "getValue"
             
             printfn "Hot Reload Test Application"
             printfn "=========================="

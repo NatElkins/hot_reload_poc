@@ -20,15 +20,13 @@ module HotReloadTest =
     let private bytesToHex (bytes: byte[]) =
         System.BitConverter.ToString(bytes).Replace("-", "")
 
-    /// Create a stable location for delta files
-    let deltaDir = 
-        Environment.CurrentDirectory
+    /// Template for our test CLASS (changed from module for Attempt #13)
+    let testClassTemplate = """
+namespace TestApp // Using the main namespace for simplicity
 
-    /// Template for our test module
-    let testModuleTemplate = """
-module SimpleTest
-
-let getValue() = {0}
+[<AbstractClass; Sealed>]
+type SimpleLib =
+    static member GetValue() = {0}
 """
 
     /// Creates a new F# checker instance
@@ -41,7 +39,7 @@ let getValue() = {0}
             printfn "[HotReloadTest] Output path: %s" outputPath
             
             // Create the source code with the given return value
-            let sourceCode = String.Format(testModuleTemplate, returnValue)
+            let sourceCode = String.Format(testClassTemplate, returnValue)
             let sourceText = SourceText.ofString sourceCode
             let sourceFileName = Path.Combine(Path.GetTempPath(), "SimpleTest.fsx")
             
@@ -114,30 +112,39 @@ let getValue() = {0}
 
             if optExn = None then
                 printfn "[HotReloadTest] Compilation successful"
-                // Get the method token for getValue
-                let methodToken = 
+                // Get the type name and method name for GetValue in SimpleLib
+                let typeAndMethodNameOpt =
                     match checkResults with
                     | FSharpCheckFileAnswer.Succeeded results ->
                         results.GetAllUsesOfAllSymbolsInFile()
-                        |> Seq.tryFind (fun (symbolUse: FSharpSymbolUse) -> 
-                            symbolUse.Symbol.DisplayName = "getValue" &&
-                            symbolUse.IsFromDefinition
-                        )
+                        // Find the definition of the static method GetValue within the SimpleLib type
+                        |> Seq.tryFind (fun symbolUse -> 
+                            match symbolUse.Symbol with
+                            | :? FSharpMemberOrFunctionOrValue as mfv 
+                                when symbolUse.IsFromDefinition && 
+                                     mfv.DisplayName = "GetValue" && 
+                                     mfv.IsModuleValueOrMember && // Check if it's a static member/module value
+                                     not mfv.IsInstanceMember ->
+                                        match mfv.DeclaringEntity with
+                                        | Some entity when entity.FullName = "TestApp.SimpleLib" -> true // Found it!
+                                        | _ -> false
+                            | _ -> false
+                            )
+                        // Extract the names if found
                         |> Option.map (fun symbolUse -> 
-                            let method = symbolUse.Symbol :?> FSharpMemberOrFunctionOrValue
-                            let typeName = method.DeclaringEntity.Value.FullName
-                            let methodName = method.DisplayName
-                            printfn "[HotReloadTest] Found method: %s in type: %s" methodName typeName
-                            (typeName, methodName)
-                        )
+                            let mfv = symbolUse.Symbol :?> FSharpMemberOrFunctionOrValue
+                            let entity = mfv.DeclaringEntity.Value
+                            printfn "[HotReloadTest] Found method: %s in type: %s (via Symbol)" mfv.DisplayName entity.FullName
+                            (entity.FullName, mfv.DisplayName)
+                            )
                     | _ -> None
 
-                match methodToken with
+                match typeAndMethodNameOpt with
                 | Some (typeName, methodName) ->
-                    printfn "[HotReloadTest] Found method: %s in type: %s" methodName typeName
+                    printfn "[HotReloadTest] Successfully identified method: %s in type: %s" methodName typeName
                     return Some (checkResults, (typeName, methodName), outputPath)
                 | None ->
-                    printfn "[HotReloadTest] Could not find method token"
+                    printfn "[HotReloadTest] Could not find method token for TestApp.SimpleLib.GetValue"
                     return None
             else
                 printfn "[HotReloadTest] Compilation failed with errors: %A" compileResult
@@ -167,7 +174,11 @@ let getValue() = {0}
             let! originalResult = compileTestModule checker 42 baselineDll
             match originalResult with
             | None -> return failwith "Failed to compile baseline version"
-            | Some (_, (typeName, methodName), _) ->
+            | Some (_, (typeName, methodName), compiledBaselinePath) ->
+                // Use the *compiler's output directory* as the delta directory
+                let deltaDir = Path.GetDirectoryName(compiledBaselinePath)
+                printfn "[HotReloadTest] Using Delta Directory: %s" deltaDir
+
                 // Load using our custom context to enable hot reload
                 let originalAssembly = alc.LoadFromAssemblyPath(baselineDll)
                 printfn "[HotReloadTest] Baseline assembly loaded:"
@@ -221,6 +232,14 @@ let getValue() = {0}
                 // Get the original getValue method
                 let simpleTestType = originalAssembly.GetType(typeName)
                 let getValueMethod = simpleTestType.GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
+                
+                // --- Verification Step: Compare FCS names with Reflection names ---
+                printfn "[HotReloadTest] Verifying names..."
+                printfn "  - Name from FCS: %s::%s" typeName methodName
+                printfn "  - Name from Reflection: %s::%s" simpleTestType.FullName getValueMethod.Name
+                if typeName <> simpleTestType.FullName || methodName <> getValueMethod.Name then
+                    printfn "[HotReloadTest] WARNING: Mismatch between names derived from FCS and Reflection!"
+                // --- End Verification ---
                 
                 // Try to find an InvokeStub method to use instead of the regular method
                 let invokeStubMethod = 
@@ -336,9 +355,9 @@ let getValue() = {0}
                 // Create the delta generator
                 let generator = DeltaGenerator.create()
                 
-                // Generate the delta - target return value 43, pass isInvokeStub flag
+                // Generate the delta - pass typeName, methodName and isInvokeStub flag
                 printfn "[HotReloadTest] Generating delta to change return value to 43..."
-                let! delta = DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub
+                let! delta = DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub typeName methodName
                 
                 match delta with
                 | None ->
@@ -455,8 +474,8 @@ let getValue() = {0}
                     // Use mdv's auto-discovery feature in the current directory with detailed flags
                     let startInfo = ProcessStartInfo(
                         FileName = "mdv",
-                        Arguments = "0.dll '/g:1.il;1.meta' /stats+ /assemblyRefs+ /il+ /md+", // Added detailed flags, simplified /g
-                        WorkingDirectory = deltaDir, // Set working directory to deltaDir
+                        Arguments = "0.dll /stats+ /assemblyRefs+ /il+ /md+", // Rely on auto-discovery in working dir
+                        WorkingDirectory = deltaDir, // Set working directory correctly
                         RedirectStandardOutput = true,
                         UseShellExecute = false,
                         CreateNoWindow = true

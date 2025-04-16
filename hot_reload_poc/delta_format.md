@@ -1,6 +1,6 @@
 # .NET Hot Reload Delta Format Details
 
-This document outlines the technical format of the deltas used by the .NET Hot Reload mechanism, specifically focusing on the Metadata, IL, and PDB deltas applied via `System.Reflection.Metadata.MetadataUpdater.ApplyUpdate`. Information is synthesized from Roslyn source code (primarily `EmitHelpers.cs` and `CSharpCompilation.cs`) and existing F# Hot Reload investigation notes.
+This document outlines the technical format of the deltas used by the .NET Hot Reload mechanism, specifically focusing on the Metadata, IL, and PDB deltas applied via `System.Reflection.Metadata.MetadataUpdater.ApplyUpdate`. Information is synthesized from Roslyn source code (primarily `EmitHelpers.cs`, `CSharpCompilation.cs`, `DeltaMetadataWriter.cs`, and related files) and existing F# Hot Reload investigation notes.
 
 ## Overall Structure
 
@@ -29,6 +29,35 @@ type Delta = {
 
 The `ModuleId` must match the `ModuleVersionId` of the assembly being updated. The `UpdatedTypes` and `UpdatedMethods` arrays contain the metadata tokens (handles) of the types and methods that were modified in this delta.
 
+## Hot Reload Delta Generation Workflow
+
+Before diving into format details, here's the complete workflow for generating deltas based on the Roslyn implementation in `EmitHelpers.EmitDifference`:
+
+1. **Setup**:
+   - Create diagnostics bag
+   - Configure emit options (matching baseline PDB format)
+   - Get module serialization properties using the baseline ModuleVersionId
+   - Verify HotReloadException type availability
+
+2. **Symbol Mapping Setup**:
+   - Hydrate symbols from initial metadata (critical for consistency)
+   - Create symbol matchers between:
+     - Source symbols → metadata symbols 
+     - Previous source symbols → metadata symbols
+     - Current source symbols → previous source symbols
+
+3. **Create Definition Map and Changes**:
+   - Create definition map tracking all changes
+   - Create symbol changes from edits and added symbols
+
+4. **Create and Populate Delta Assembly**:
+   - Instantiate delta assembly builder
+   - Compile only changed symbols
+   - Serialize delta to streams (metadata, IL, PDB)
+
+5. **Return Updated Baseline**:
+   - Return EmitDifferenceResult with updated baseline and updated method handles
+
 ## Critical Implementation Considerations for F#
 
 Before diving into format details, here are critical considerations when implementing hot reload for F#:
@@ -47,7 +76,25 @@ Before diving into format details, here are critical considerations when impleme
 
 The metadata delta is essentially a minimal valid PE metadata section containing only the changes required for the update. It follows the ECMA-335 metadata structure.
 
-### 1.1. Metadata Header ("BSJB" Header)
+### 1.1. Metadata Builder Configuration
+
+Based on Roslyn's implementation, a `MetadataBuilder` must be properly configured for delta generation:
+
+```csharp
+private static MetadataBuilder MakeTablesBuilder(EmitBaseline previousGeneration)
+{
+    // Create a new metadata builder
+    var builder = new MetadataBuilder();
+    
+    // Configure for delta generation - allocate space for ENC tables
+    builder.SetCapacity(TableIndex.EncLog, 64);
+    builder.SetCapacity(TableIndex.EncMap, 64);
+    
+    return builder;
+}
+```
+
+### 1.2. Metadata Header ("BSJB" Header)
 
 The metadata delta stream begins with a standard metadata header:
 
@@ -63,7 +110,7 @@ The metadata delta stream begins with a standard metadata header:
 | Variable| 2            | Flags                | Reserved, `0`                                               |
 | Variable| 2            | Number of Streams    | Count of metadata streams present in the delta              |
 
-### 1.2. Stream Headers
+### 1.3. Stream Headers
 
 Following the main header are the stream headers for each metadata stream included in the delta. The key streams involved in Hot Reload deltas are typically `#~` (or `#-` for compressed metadata) and potentially `#Strings`, `#Blob`, `#GUID`, `#US` if new entries are added to them. The `#Schema` stream (`#~` or `#-`) contains the actual metadata table changes.
 
@@ -76,33 +123,127 @@ Each stream header has the format:
 | 8      | Variable     | Name      | Null-terminated stream name (e.g., "#~ ", "#Strings ") |
 | Variable| Variable     | Padding   | Zero bytes to align to 4-byte boundary            |
 
-**Important:** The delta **must** contain headers for *all* standard streams (`#~`/`#-`, `#Strings`, `#US`, `#GUID`, `#Blob`), even if those streams are empty (Size = 0) in the delta itself. Roslyn's `MetadataBuilder` handles the creation of these streams.
+**Important:** The delta **must** contain headers for *all* standard streams (`#~`/`#-`, `#Strings`, `#US`, `#GUID`, `#Blob`), even if those streams are empty (Size = 0) in the delta itself. This is handled automatically by the `MetadataBuilder`.
 
-### 1.3. Metadata Tables (`#~` or `#-` Stream)
+### 1.4. Required Metadata Tables
 
-This stream contains the core metadata changes. It adheres to the ECMA-335 format for metadata tables. For Hot Reload (Edit and Continue - EnC):
+Based on the Roslyn implementation, the following tables are essential for delta generation:
 
-- **Adds Only:** Deltas generally only *add* rows to metadata tables. Existing rows are not typically modified directly.
-- **`ENCLog` Table:** Records the operations performed. For simple method updates, an entry is added pointing to the `MethodDef` token being updated, with an `EditAndContinueOperation.Default` code.
-- **`ENCMap` Table:** Maps tokens from the previous generation to the current generation. This is crucial for the runtime to find the updated code. For simple method updates, an entry maps the original `MethodDef` token to itself (as the token value doesn't usually change for simple updates, but the mapping is still required).
+1. **`ENCLog` Table**: Records operations performed on specific tokens. Each entry contains:
+   - Token: The metadata token being updated (e.g., method, type)
+   - FuncCode: The operation (typically `EditAndContinueOperation.Default`)
 
-Roslyn's `Compilation.EmitDifference` uses `MetadataBuilder.AddEncLogEntry` and `MetadataBuilder.AddEncMapEntry` to populate these tables. The `MetadataRootBuilder.Serialize` method then generates the byte stream for the `#~` table heap.
+2. **`ENCMap` Table**: Maps tokens from previous generation to current. Each entry contains:
+   - Token: The metadata token being mapped
 
-**Example (Conceptual):**
-If updating method `0x06000001`, the `#~` stream in the delta would contain data representing:
-- An `ENCLog` table row: `{ Token: 0x06000001, FuncCode: EditAndContinueOperation.Default }`
-- An `ENCMap` table row: `{ Token: 0x06000001 }`
+3. **Other Modified Tables**: Depending on the changes, may include:
+   - `TypeDef`: For added/updated types
+   - `MethodDef`: For added/updated methods
+   - `Field`: For new fields
+   - `Property`: For new properties
+   - `Event`: For new events
+   - `Param`: For parameters of new methods
+   - `CustomAttribute`: For any attributes on new entities
 
-The actual byte representation depends on table sizes, heap offsets, etc., as defined by ECMA-335.
+### 1.5. ENCLog and ENCMap Population
 
-### 1.4. F# Metadata Delta Implementation Advice
+From `DeltaMetadataWriter.cs`, here's how the ENC tables are populated:
 
-**Recommended Approach**: Use System.Reflection.Metadata's MetadataBuilder and MetadataRootBuilder instead of manual header construction:
+```csharp
+// PopulateEncLogTableRows adds entries to the ENCLog table
+private void PopulateEncLogTableRows(ImmutableArray<int> rowCounts, ArrayBuilder<int> paramEncMapRows)
+{
+    // Add TypeDef entries
+    foreach (var typeDef in _typeDefs.GetRows())
+    {
+        metadata.AddEncLogEntry(
+            MetadataTokens.TypeDefinitionHandle(_typeDefs.GetRowId(typeDef)),
+            (EditAndContinueOperation)0);  // Default operation
+    }
+    
+    // Add Method entries
+    foreach (var methodDef in _methodDefs.GetRows())
+    {
+        metadata.AddEncLogEntry(
+            MetadataTokens.MethodDefinitionHandle(_methodDefs.GetRowId(methodDef)),
+            (EditAndContinueOperation)0);
+    }
+    
+    // Similar entries for fields, events, properties, etc.
+}
+
+// PopulateEncMapTableRows adds entries to the ENCMap table
+private void PopulateEncMapTableRows(ImmutableArray<int> rowCounts, ArrayBuilder<int> paramEncMapRows)
+{
+    // Map TypeDef tokens
+    foreach (var typeDef in _typeDefs.GetRows())
+    {
+        metadata.AddEncMapEntry(
+            MetadataTokens.TypeDefinitionHandle(_typeDefs.GetRowId(typeDef)));
+    }
+    
+    // Map Method tokens
+    foreach (var methodDef in _methodDefs.GetRows())
+    {
+        metadata.AddEncMapEntry(
+            MetadataTokens.MethodDefinitionHandle(_methodDefs.GetRowId(methodDef)));
+    }
+    
+    // Similar mappings for fields, events, properties, etc.
+}
+```
+
+### 1.6. MetadataBuilder API for Delta Generation
+
+Here's how MetadataBuilder is used specifically for generating deltas:
+
+```csharp
+// Create a MetadataBuilder
+MetadataBuilder metadataBuilder = new MetadataBuilder();
+
+// Set capacity for ENC tables
+metadataBuilder.SetCapacity(TableIndex.EncLog, 64);
+metadataBuilder.SetCapacity(TableIndex.EncMap, 64);
+
+// For each updated method (required for all changes):
+metadataBuilder.AddEncLogEntry(
+    MetadataTokens.MethodDefinitionHandle(methodTokenRowId),
+    EditAndContinueOperation.Default);
+
+metadataBuilder.AddEncMapEntry(
+    MetadataTokens.MethodDefinitionHandle(methodTokenRowId));
+
+// When adding new types (if applicable):
+metadataBuilder.AddEncLogEntry(
+    MetadataTokens.TypeDefinitionHandle(typeTokenRowId),
+    EditAndContinueOperation.Default);
+
+metadataBuilder.AddEncMapEntry(
+    MetadataTokens.TypeDefinitionHandle(typeTokenRowId));
+
+// Add any relevant CustomAttributes
+EntityHandle parentHandle = MetadataTokens.MethodDefinitionHandle(methodTokenRowId);
+BlobHandle signature = metadataBuilder.GetOrAddBlob(customAttributeSignatureBytes);
+metadataBuilder.AddCustomAttribute(parentHandle, attributeCtor, signature);
+
+// Serialize using MetadataRootBuilder
+MetadataRootBuilder rootBuilder = new MetadataRootBuilder(metadataBuilder);
+BlobBuilder blobBuilder = new BlobBuilder();
+rootBuilder.Serialize(blobBuilder, metadataStreamVersion: 1, 0);
+
+// The result is in blobBuilder
+```
+
+### 1.7. F# Metadata Delta Implementation Example
 
 ```fsharp
-// Example approach for building metadata delta
+// Example approach for building metadata delta in F#
 let buildMetadataDelta (methodToken: int) =
     let metadataBuilder = MetadataBuilder()
+    
+    // Set capacity for ENC tables
+    metadataBuilder.SetCapacity(TableIndex.EncLog, 64)
+    metadataBuilder.SetCapacity(TableIndex.EncMap, 64)
     
     // Add the method update to ENCLog
     metadataBuilder.AddEncLogEntry(
@@ -116,6 +257,8 @@ let buildMetadataDelta (methodToken: int) =
     // Create metadata root and serialize
     let rootBuilder = MetadataRootBuilder(metadataBuilder)
     let metadataBlob = BlobBuilder()
+    
+    // Important: metadataStreamVersion must be 1 for EnC deltas
     rootBuilder.Serialize(metadataBlob, metadataStreamVersion = 1, 0) 
     
     metadataBlob.ToImmutableArray()
@@ -126,6 +269,8 @@ let buildMetadataDelta (methodToken: int) =
 - Missing stream headers for the 5 standard streams
 - Incorrect alignment/padding of headers
 - Wrong metadata version numbers
+- Not setting metadataStreamVersion to 1 during serialization
+- Not adding both ENCLog and ENCMap entries for the same tokens
 
 ## 2. IL Delta Format
 
@@ -141,22 +286,129 @@ The IL delta is simply a concatenation of the updated method bodies. Each method
 2.  **Method Body:** The CIL instructions.
 3.  **Exception Handling Clauses (Optional):** If the method has try/catch blocks.
 
-### 2.2. Generation
+### 2.2. Method Body Generation in Roslyn
 
-Roslyn's `PEModuleBuilder.CompileMethod` generates the IL using `Microsoft.CodeAnalysis.CodeGen.ILBuilder`. The `EmitDifference` process compiles only the changed methods and serializes their IL bodies directly into the `ilStream`.
+Method bodies are serialized in `MetadataWriter.SerializeMethodBody`:
 
-**Example (Updating `SimpleTest.getValue` to return 43):**
+```csharp
+private int SerializeMethodBody(
+    MethodBodyStreamEncoder encoder, 
+    IMethodBody methodBody,
+    StandaloneSignatureHandle localSignatureHandleOpt, 
+    ref UserStringHandle mvidStringHandle, 
+    ref Blob mvidStringFixup)
+{
+    // Create method header based on method characteristics
+    var bodyEncoder = methodBody.LocalsCount > 0 || methodBody.MaxStack > 8 || methodBody.ExceptionRegions.Length > 0
+        ? encoder.AddMethodBody(
+            codeSize: methodBody.IL.Length,
+            maxStack: methodBody.MaxStack, 
+            exceptionRegionCount: methodBody.ExceptionRegions.Length,
+            hasSmallExceptionRegions: MayUseSmallExceptionHeaders(methodBody.ExceptionRegions),
+            localVariablesSignature: localSignatureHandleOpt)
+        : encoder.AddMethodBody(methodBody.IL.Length);
 
-- **Method Header (Tiny Format):** Assuming the new IL is 3 bytes long (ldc.i4.s 43; ret).
-    - `Flags = 0x02` (Tiny)
-    - `CodeSize = 3`
-    - Header byte: `(3 << 2) | 0x02 = 0x0C | 0x02 = 0x0E`
-- **IL Instructions:**
-    - `ldc.i4.s 43` -> `0x1F 0x2B` (Opcode `0x1F`, operand `43` = `0x2B`)
-    - `ret` -> `0x2A`
-- **Concatenated IL Delta:** `0x0E 1F 2B 2A` (Header byte might be incorrect here, need to verify tiny format encoding. Roslyn calculates this.) *Correction based on DeltaGenerator.fs*: Seems tiny header is `0x02` followed by size byte `0x03`? Needs careful checking against spec/Roslyn. The provided `DeltaGenerator.fs` uses `0x02`, then `0x03` (size), then IL `0x1F 0x2B 2A` which seems plausible if the first byte only indicates tiny format and the second byte is the size.
+    // Add IL bytes
+    var body = bodyEncoder.CreateBlobBuilder();
+    WriteInstructions(body, methodBody.IL, ref mvidStringHandle, ref mvidStringFixup);
+    
+    // Add exception handlers if present
+    if (methodBody.ExceptionRegions.Length > 0)
+    {
+        var exceptionEncoder = bodyEncoder.ExceptionRegions;
+        SerializeMethodBodyExceptionHandlerTable(exceptionEncoder, methodBody.ExceptionRegions);
+    }
+    
+    return bodyEncoder.Offset;
+}
+```
 
-### 2.3. F# IL Delta Implementation Advice
+### 2.3. Tiny vs. Fat Method Format Selection
+
+Roslyn chooses between tiny and fat formats based on method characteristics:
+
+```csharp
+// For tiny methods (MaxStack <= 8, no locals, CodeSize < 64, no exceptions):
+encoder.AddMethodBody(methodBody.IL.Length);
+
+// For all other methods (fat format):
+encoder.AddMethodBody(
+    codeSize: methodBody.IL.Length,
+    maxStack: methodBody.MaxStack, 
+    exceptionRegionCount: methodBody.ExceptionRegions.Length,
+    hasSmallExceptionRegions: MayUseSmallExceptionHeaders(methodBody.ExceptionRegions),
+    localVariablesSignature: localSignatureHandle);
+```
+
+### 2.4. Local Variable Signature Handling
+
+From `DeltaMetadataWriter.SerializeLocalVariablesSignature`:
+
+```csharp
+protected override StandaloneSignatureHandle SerializeLocalVariablesSignature(IMethodBody body)
+{
+    // For methods with locals:
+    if (body.LocalsCount > 0)
+    {
+        var localBuilder = new BlobBuilder();
+        
+        // Write LOCAL_SIG header (0x07)
+        localBuilder.WriteByte(0x07);
+        
+        // Write local count as compressed integer
+        localBuilder.WriteCompressedInteger(body.LocalsCount);
+        
+        // Write each local's type signature
+        foreach (var local in body.Locals)
+        {
+            SerializeLocalVariableType(new SignatureTypeEncoder(localBuilder), local);
+        }
+        
+        // Create standalone signature
+        var localSigBlob = metadata.GetOrAddBlob(localBuilder);
+        return metadata.AddStandaloneSignature(localSigBlob);
+    }
+    
+    return default;
+}
+```
+
+### 2.5. F# IL Delta Implementation Example
+
+```fsharp
+// Create IL delta for a method
+let createILDelta (ilBytes: byte[]) (hasLocals: bool) (maxStack: int) (localVarSigToken: int option) =
+    let ilBlob = BlobBuilder()
+    
+    // Choose method format
+    if not hasLocals && maxStack <= 8 && ilBytes.Length < 64 then
+        // Tiny format
+        let headerByte = byte ((ilBytes.Length <<< 2) ||| 0x2)
+        ilBlob.WriteByte(headerByte)
+    else
+        // Fat format (requires 12-byte header)
+        // See ECMA-335 II.25.4.2 for fat header format
+        let flags = 0x3 // Fat format
+        let headerSize = 0x3 // 3 DWords = 12 bytes
+        let maxStackEncoded = maxStack
+        let codeSize = ilBytes.Length
+        
+        // Create header
+        let header = BitConverter.GetBytes((flags ||| (headerSize <<< 2) ||| (maxStackEncoded <<< 8)) ||| 0)
+        ilBlob.WriteBytes(header)
+        ilBlob.WriteInt32(codeSize)
+        
+        // Write LocalVarSig token if hasLocals
+        if hasLocals && localVarSigToken.IsSome then
+            ilBlob.WriteInt32(localVarSigToken.Value)
+        else
+            ilBlob.WriteInt32(0)
+    
+    // Write IL bytes
+    ilBlob.WriteBytes(ilBytes)
+    
+    ilBlob.ToImmutableArray()
+```
 
 **Tiny Method Format Correction**: According to ECMA-335 (II.25.4.2), a tiny format method header is a single byte where:
 - The lowest two bits are set to 0x2
@@ -172,13 +424,30 @@ Header byte = (3 << 2) | 0x2 = 0xE
 - Method size includes the IL instructions but not the header itself
 - For try/catch blocks, you must use a fat header
 
-**For More Complex Methods**: Consider using an established IL generation library or leveraging F# compiler services for IL emission instead of manual encoding.
-
 ## 3. PDB Delta Format
 
 The PDB delta contains updates to the debugging information, enabling features like setting breakpoints and stepping through the updated code. It uses the Portable PDB format (#Pdb stream).
 
-### 3.1. Structure
+### 3.1. PDB Stream Creation
+
+From Roslyn, we can see that it uses `PortablePdbBuilder` for portable PDBs:
+
+```csharp
+// From MetadataWriter.GetPortablePdbBuilder
+public PortablePdbBuilder GetPortablePdbBuilder(
+    ImmutableArray<int> typeSystemRowCounts, 
+    MethodDefinitionHandle debugEntryPoint,
+    Func<IEnumerable<Blob>, BlobContentId> deterministicIdProviderOpt)
+{
+    return new PortablePdbBuilder(
+        metadata: _debugMetadataOpt, 
+        typeSystemRowCounts: typeSystemRowCounts,
+        entryPoint: debugEntryPoint, 
+        idProvider: deterministicIdProviderOpt);
+}
+```
+
+### 3.2. Structure
 
 The PDB delta typically contains updates to specific tables within the Portable PDB format, primarily:
 
@@ -189,61 +458,134 @@ The PDB delta typically contains updates to specific tables within the Portable 
 5.  **`LocalConstant` Table:** Defines local constants.
 6.  **`CustomDebugInformation` Table:** Can contain various types of debug info, such as state machine stepping info or dynamic local variable info.
 
-### 3.2. PDB Implementation Strategy for F#
+### 3.3. Sequence Points and Document Creation
 
-**WARNING**: PDB delta generation is the most complex part of hot reload implementation. The current F# DeltaGenerator approach with manual byte construction is insufficient for production use.
+PDB generation requires careful tracking of sequence points to map IL offsets to source locations:
 
-**Recommended Approaches (in order of preference):**
+```csharp
+// Create document info
+var documentName = metadataBuilder.GetOrAddDocumentName(sourceFilePath);
+var documentLanguage = metadataBuilder.GetOrAddGuid(LanguageGuid);
+var documentHashAlgorithm = metadataBuilder.GetOrAddGuid(HashAlgorithmGuid);
+var documentHash = metadataBuilder.GetOrAddBlob(hashBytes);
+
+var documentHandle = metadataBuilder.AddDocument(
+    documentName,
+    hashAlgorithm,
+    documentHash,
+    documentLanguage);
+
+// Create method debug info with sequence points
+var methodHandle = MetadataTokens.MethodDefinitionHandle(methodDef.Handle.RowId);
+var sequencePoints = new BlobBuilder();
+var encoder = new SequencePointEncoder(sequencePoints);
+
+// Add sequence points
+encoder.AddSequencePoint(
+    ilOffset: 0,
+    startLine: 10,
+    startColumn: 1,
+    endLine: 10,
+    endColumn: 20,
+    isHidden: false);
+
+encoder.AddSequencePoint(/*...*/);
+
+// Add method debug information
+var methodDebugInfoHandle = metadataBuilder.AddMethodDebugInformation(
+    documentHandle,
+    sequencePoints.ToImmutableArray());
+```
+
+### 3.4. Local Variable Scope Handling
+
+PDB deltas must properly track local variable scopes:
+
+```csharp
+// Add local scope
+var localScopeHandle = metadataBuilder.AddLocalScope(
+    methodDef: methodHandle,
+    importScopeHandle: importScope,
+    variableList: firstVariableHandle,
+    constantList: firstConstantHandle,
+    startOffset: 0,
+    length: methodBodyLength);
+
+// Add local variables
+foreach (var local in locals)
+{
+    var localVariableHandle = metadataBuilder.AddLocalVariable(
+        attributes: LocalVariableAttributes.None,
+        index: local.Slot,
+        name: metadataBuilder.GetOrAddString(local.Name));
+}
+
+// Add local constants if needed
+foreach (var constant in constants)
+{
+    metadataBuilder.AddLocalConstant(
+        name: metadataBuilder.GetOrAddString(constant.Name),
+        signature: GetLocalConstantSignature(constant));
+}
+```
+
+### 3.5. F# PDB Delta Implementation Example
+
+```fsharp
+// Create PDB delta for a method
+let createPdbDelta (methodToken: int) (sourceFile: string) (sequencePoints: SequencePoint[]) =
+    let debugMetadataBuilder = MetadataBuilder()
+    
+    // Add document
+    let documentName = debugMetadataBuilder.GetOrAddDocumentName(sourceFile)
+    let languageGuid = debugMetadataBuilder.GetOrAddGuid(new Guid("3F5162F8-07C6-11D3-9053-00C04FA302A1")) // GUID_Language_FSharp
+    let hashAlgorithm = debugMetadataBuilder.GetOrAddGuid(new Guid("8829d00f-11b8-4213-878b-770e8597ac16")) // SHA256
+    let documentHandle = debugMetadataBuilder.AddDocument(
+        documentName,
+        hashAlgorithm,
+        default, // No hash for now
+        languageGuid)
+    
+    // Add sequence points
+    let blobBuilder = BlobBuilder()
+    let encoder = SequencePointEncoder(blobBuilder)
+    
+    for sp in sequencePoints do
+        encoder.AddSequencePoint(
+            sp.ILOffset,
+            sp.StartLine,
+            sp.StartColumn,
+            sp.EndLine,
+            sp.EndColumn,
+            sp.IsHidden)
+    
+    // Add method debug information
+    let methodHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
+    debugMetadataBuilder.AddMethodDebugInformation(
+        documentHandle,
+        debugMetadataBuilder.GetOrAddBlob(blobBuilder))
+    
+    // Create portable PDB
+    let pdbBlob = BlobBuilder()
+    let pdbBuilder = PortablePdbBuilder(
+        debugMetadataBuilder,
+        ImmutableArray.CreateRange([| methodToken |]), // Just tracking this method
+        default, // No entry point
+        null) // No deterministic ID provider
+    
+    pdbBuilder.Serialize(pdbBlob)
+    pdbBlob.ToImmutableArray()
+```
+
+**WARNING**: PDB delta generation is the most complex part of hot reload implementation. A manual byte construction approach is insufficient for production use.
+
+**Recommended Approaches for F# PDB Generation**:
 
 1. **Use FCS Debug Information Emission**: If the F# Compiler Services can emit debug information for a method, adapt this to produce portable PDB deltas.
 
-2. **Leverage System.Reflection.Metadata.Ecma335 APIs**: Use the MetadataBuilder and debugging metadata APIs to construct proper PDB deltas:
+2. **Leverage System.Reflection.Metadata.Ecma335 APIs**: Use the MetadataBuilder and debugging metadata APIs to construct proper PDB deltas.
 
-```fsharp
-let generatePdbDelta (methodToken: int) (sourceFile: string) (line: int) (column: int) =
-    // Use structured APIs instead of manual byte construction
-    let metadataBuilder = MetadataBuilder()
-    
-    // Add document
-    let documentName = metadataBuilder.GetOrAddDocumentName(sourceFile)
-    let documentHandle = metadataBuilder.AddDocument(
-        documentName,
-        hashAlgorithm: default,
-        hash: default,
-        language: MetadataTokens.GuidHandle(1))
-    
-    // Add method debug information with sequence points
-    let methodHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
-    let codeBuilder = BlobBuilder()
-    let sequencePointEncoder = new SequencePointEncoder(codeBuilder)
-    
-    // Add a sequence point
-    sequencePointEncoder.AddSequencePoint(
-        ilOffset = 0,
-        startLine = line,
-        startColumn = column,
-        endLine = line,
-        endColumn = column + 10,
-        isHidden = false)
-    
-    metadataBuilder.AddMethodDebugInformation(
-        documentHandle,
-        codeBuilder.ToImmutableArray())
-    
-    // Serialize to blob
-    // ...
-```
-
-3. **Minimal Approach for Prototypes**: For early prototyping, a minimal PDB delta might work but will have limited debugging capabilities:
-
-```fsharp
-let minimalPdbDelta (methodToken: int) =
-    // Very basic PDB delta that maps method to an empty sequence point list
-    // Note: This may allow some basic debugging but not proper line stepping
-    // ...
-```
-
-**Critical Note**: Production-ready hot reload requires proper PDB deltas with accurate sequence point information. Without this, users will have a poor debugging experience.
+3. **Minimal Approach for Prototyping**: For early prototyping, a minimal PDB delta may allow basic debugging functionality.
 
 ## 4. Common Errors and Troubleshooting
 
@@ -293,13 +635,24 @@ A robust testing approach for F# hot reload implementation:
 
 ## Summary and Recommendations for F#
 
-1.  **Metadata Delta:** Avoid manual header construction. Use F# Compiler Services (FCS) or a robust metadata library (like `System.Reflection.Metadata`) to generate the *entire* metadata delta structure, including all required stream headers (even if empty) and correctly formatted/serialized `ENCLog`/`ENCMap` entries within the `#~` stream. Ensure the `ModuleId` matches the target assembly.
+1. **Metadata Delta:** Use System.Reflection.Metadata APIs to generate the entire metadata delta structure, including all required stream headers and correctly formatted/serialized `ENCLog`/`ENCMap` entries. Key points:
+   - Use `MetadataBuilder` and `MetadataRootBuilder`
+   - Set proper capacities for ENC tables
+   - Ensure metadataStreamVersion = 1 during serialization
+   - Add entries to both ENCLog and ENCMap tables
+   - Ensure ModuleId matches target assembly exactly
 
-2.  **IL Delta:** The current approach seems plausible but verify method header encoding against the ECMA-335 spec. Consider using F# compiler services for IL emission rather than manual bytecode construction for complex methods.
+2. **IL Delta:** Use the proper method body format based on method characteristics:
+   - Tiny format for small methods (no locals, size < 64, stack ≤ 8)
+   - Fat format for everything else
+   - Correctly serialize local variable signatures if needed
+   - Exception handling requires special consideration
 
-3.  **PDB Delta:** Manual generation is not recommended for production. Leverage FCS's debugging information capabilities if possible, or build on System.Reflection.Metadata.Ecma335 APIs for producing portable PDB deltas with proper sequence points.
-
-The core challenge lies in accurately replicating the complex serialization logic embedded within Roslyn's emit pipeline (`CSharpCompilation.EmitDifference`, `PEBuilder`, `MetadataBuilder`, `ILBuilder`, `PdbWriter`) using F# tools and FCS. Relying on FCS's debugging information capabilities or lower-level `System.Reflection.Metadata` APIs seems more promising than manual byte construction, especially for Metadata and PDB deltas.
+3. **PDB Delta:** Use System.Reflection.Metadata.Ecma335 APIs for PDB generation:
+   - Create document entries with proper language GUIDs
+   - Add sequence points mapping IL offsets to source locations
+   - Add local variable scopes and variable information
+   - Use PortablePdbBuilder for serialization
 
 **Implementation Strategy**:
 1. Start with a prototype that can update simple method bodies

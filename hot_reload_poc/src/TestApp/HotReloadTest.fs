@@ -471,22 +471,61 @@ type SimpleLib =
                     // Run mdv analysis on the delta files BEFORE attempting update
                     printfn "[HotReloadTest] Running mdv analysis BEFORE update attempt..."
                     
-                    let startInfo = ProcessStartInfo(
-                        FileName = "mdv",
-                        Arguments = "0.dll '/g:1.meta;1.il' /stats+ /assemblyRefs+ /il+ /md+", // Rely on auto-discovery in working dir
-                        WorkingDirectory = deltaDir, // Set working directory correctly
+                    // Create a bash script to run mdv with the correct arguments
+                    let scriptPath = Path.Combine(Path.GetTempPath(), "run_mdv.sh")
+                    let scriptContent = 
+                        "#!/bin/bash\n\n" +
+                        "# Change to the specified directory\n" +
+                        $"cd \"{deltaDir}\" || {{ echo \"Failed to change directory\"; exit 1; }}\n\n" +
+                        "# Run mdv with the specified arguments\n" +
+                        "mdv 0.dll '/g:1.meta;1.il' /stats+ /assemblyRefs+ /il+ /md+\n\n" +
+                        "# Store and display exit code\n" +
+                        "EXIT_CODE=$?\n" +
+                        "echo \"mdv exited with code: $EXIT_CODE\"\n\n" +
+                        "exit $EXIT_CODE"
+                    
+                    // Write script to file
+                    File.WriteAllText(scriptPath, scriptContent)
+                    
+                    // Make script executable
+                    let chmodStartInfo = ProcessStartInfo(
+                        FileName = "chmod",
+                        Arguments = $"+x \"{scriptPath}\"",
                         RedirectStandardOutput = true,
+                        RedirectStandardError = true,
                         UseShellExecute = false,
                         CreateNoWindow = true
                     )
                     
                     try
-                        use mdvProcess = Process.Start(startInfo)
-                        let mdvOutput = mdvProcess.StandardOutput.ReadToEnd()
-                        mdvProcess.WaitForExit()
-                        printfn "[HotReloadTest] mdv (pre-update) output:\n%s" mdvOutput
+                        use chmodProcess = Process.Start(chmodStartInfo)
+                        chmodProcess.WaitForExit()
+                        
+                        // Now run the script
+                        let scriptStartInfo = ProcessStartInfo(
+                            FileName = scriptPath,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false, 
+                            CreateNoWindow = true
+                        )
+                        
+                        use scriptProcess = Process.Start(scriptStartInfo)
+                        let scriptOutput = scriptProcess.StandardOutput.ReadToEnd()
+                        let scriptError = scriptProcess.StandardError.ReadToEnd()
+                        scriptProcess.WaitForExit()
+                        
+                        printfn "[HotReloadTest] Script output:\n%s" scriptOutput
+                        if not (String.IsNullOrWhiteSpace(scriptError)) then
+                            printfn "[HotReloadTest] Script errors:\n%s" scriptError
+                            
+                        // Clean up the script file
+                        try
+                            File.Delete(scriptPath)
+                        with ex ->
+                            printfn "[HotReloadTest] Failed to delete script file: %s" ex.Message
                     with ex ->
-                        printfn "[HotReloadTest] Failed to run mdv (pre-update): %s" ex.Message
+                        printfn "[HotReloadTest] Failed to run mdv script: %s" ex.Message
 
                     try
                         printfn "[HotReloadTest] Attempting to apply update..."

@@ -292,7 +292,7 @@ module DeltaGenerator =
         // Add method debug information with empty sequence points
         debugMetadataBuilder.AddMethodDebugInformation(
             documentHandle,
-            emptySequencePoints)
+            emptySequencePoints) |> ignore
         
         // Create portable PDB with proper row counts
         let pdbBlob = new BlobBuilder()
@@ -323,7 +323,7 @@ module DeltaGenerator =
             MethodDefinitionHandle(), // No entry point
             null)  // No ID provider
         
-        pdbBuilder.Serialize(pdbBlob)
+        pdbBuilder.Serialize(pdbBlob) |> ignore
         let pdbBytes = pdbBlob.ToArray()
         
         printfn "[DeltaGenerator] Generated PDB delta: %d bytes" pdbBytes.Length

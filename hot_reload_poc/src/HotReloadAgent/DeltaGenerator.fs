@@ -88,7 +88,7 @@ module DeltaGenerator =
     let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
         printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X" methodToken
         printfn "[DeltaGenerator] Declaring type token: 0x%08X" declaringTypeToken
-        printfn "[DeltaGenerator] Using module ID: %A" moduleId
+        printfn "[DeltaGenerator] Using module ID (MVID): %A" moduleId
         
         let metadataBuilder = MetadataBuilder()
         
@@ -102,23 +102,25 @@ module DeltaGenerator =
         let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken % 0x01000000)
         let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken % 0x01000000)
         
-        // Step 2: Generate a proper EncId for this delta
-        // This is the GUID that mdv looks for to identify this as a valid EnC delta
-        let encIdGuid = Guid.Parse("86d3b3ff-8f3c-44d6-bdea-dc76b2f7c2d1") // Use the same EncId as C# for testing
-        let encIdHandle = metadataBuilder.GetOrAddGuid(encIdGuid)
-        let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
-        let emptyGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Empty)
+        // Step 2: Generate a proper EncId for this delta and get handles
+        // Roslyn generates a *new* unique Guid for each delta. This is the EncId.
+        let deltaEncId = Guid.NewGuid()
+        printfn "[DeltaGenerator] Generated unique delta EncId: %A" deltaEncId
+        let encIdHandle = metadataBuilder.GetOrAddGuid(deltaEncId)
         
-        // Step 3: Add module definition with proper EncId
+        // The MVID of the baseline assembly becomes the EncBaseId for the first delta.
+        let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
+        let encBaseIdHandle = mvidHandle // Use MVID as EncBaseId for Gen 1 delta
+        
+        // Step 3: Add module definition with proper EncId and EncBaseId
         // IMPORTANT: Module name MUST match the original assembly's module name ("0.dll")
-        // Do not use "SimpleLib" or any other name here
         let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll")
         metadataBuilder.AddModule(
-            1,                // generation - set to 1 for delta (this is crucial!)
-            moduleNameHandle, // name - must match original module name
-            mvidHandle,       // mvid
-            encIdHandle,      // encId - critical for EnC
-            emptyGuidHandle)  // encBaseId
+            1,                 // generation - set to 1 for delta (this is crucial!)
+            moduleNameHandle,  // name - must match original module name
+            mvidHandle,        // mvid - The MVID of the original assembly
+            encIdHandle,       // encId - The *new unique* Guid for this delta
+            encBaseIdHandle)   // encBaseId - The MVID of the original assembly for Gen 1 delta
         |> ignore
         
         // Step 4: Add required references similar to C# delta

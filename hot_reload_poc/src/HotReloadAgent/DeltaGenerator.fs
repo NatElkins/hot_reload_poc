@@ -17,6 +17,8 @@ open System.Collections.Immutable
 open System.Runtime.CompilerServices
 open Prelude
 
+#nowarn 3391
+
 /// <summary>
 /// Delta structure for hot reload updates.
 /// Matches the format expected by MetadataUpdater.ApplyUpdate.
@@ -62,13 +64,18 @@ module DeltaGenerator =
         printfn "[DeltaGenerator] Generating method signature..."
         let signatureBuilder = new BlobBuilder()
         let encoder = new BlobEncoder(signatureBuilder)
-        let methodSigEncoder = encoder.MethodSignature(SignatureCallingConvention.Default, 0, isInstanceMethod = false)
+        
+        // Create standard method signature with no parameters that returns Int32
+        let methodSigEncoder = encoder.MethodSignature(
+            SignatureCallingConvention.Default,   // Standard calling convention
+            0,                                    // 0 generic parameters
+            isInstanceMethod = false)             // Static method
         
         // Encode return type and parameters
         methodSigEncoder.Parameters(
-            0, 
-            (fun returnType -> returnType.Type().Int32()),
-            (fun _ -> ())
+            0,                                    // 0 parameters
+            (fun returnType -> returnType.Type().Int32()),  // Return Int32
+            (fun _ -> ())                         // No parameters to encode
         )
         
         let signatureBytes = signatureBuilder.ToArray()
@@ -79,118 +86,176 @@ module DeltaGenerator =
     /// Generates metadata delta for a method update.
     /// </summary>
     let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
-        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X (Attempt #16: Att#13 Config + Extra GUIDs)" methodToken
+        printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X" methodToken
         printfn "[DeltaGenerator] Declaring type token: 0x%08X" declaringTypeToken
         printfn "[DeltaGenerator] Using module ID: %A" moduleId
         
         let metadataBuilder = MetadataBuilder()
+        
+        // Set capacity for ENC tables
+        metadataBuilder.SetCapacity(TableIndex.EncLog, 64)
+        metadataBuilder.SetCapacity(TableIndex.EncMap, 64)
 
-        // 1. Add Module definition 
-        let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll") 
+        // Step 1: Get proper tokens with correct masking
+        // The token value is composed of table index (high byte) and row index (low 3 bytes)
+        // We need to extract just the row part using a mask
+        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken % 0x01000000)
+        let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken % 0x01000000)
+        
+        // Step 2: Generate a proper EncId for this delta
+        // This is the GUID that mdv looks for to identify this as a valid EnC delta
+        let encIdGuid = Guid.Parse("86d3b3ff-8f3c-44d6-bdea-dc76b2f7c2d1") // Use the same EncId as C# for testing
+        let encIdHandle = metadataBuilder.GetOrAddGuid(encIdGuid)
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
-        let zeroGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Empty)
-        let _ = metadataBuilder.AddModule(1, moduleNameHandle, mvidHandle, zeroGuidHandle, zeroGuidHandle)
-
-        // 2. Add essential references (BEFORE TypeDef) 
-        let systemRuntimeAssemblyName = metadataBuilder.GetOrAddString("System.Runtime")
-        let systemRuntimeVersion = System.Version(10, 0, 0, 0) 
-        let ecmaPublicKeyTokenBlob = metadataBuilder.GetOrAddBlob([| 0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy |])
-        let systemRuntimeAssemblyRef = metadataBuilder.AddAssemblyReference(
-            name = systemRuntimeAssemblyName, version = systemRuntimeVersion, culture = metadataBuilder.GetOrAddString(""), 
-            publicKeyOrToken = ecmaPublicKeyTokenBlob, flags = AssemblyFlags.PublicKey, hashValue = BlobHandle()
-        )
+        let emptyGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Empty)
+        
+        // Step 3: Add module definition with proper EncId
+        let moduleNameHandle = metadataBuilder.GetOrAddString("SimpleLib")
+        metadataBuilder.AddModule(
+            1,                // generation - set to 1 for delta (this is crucial!)
+            moduleNameHandle, // name
+            mvidHandle,       // mvid
+            encIdHandle,      // encId - critical for EnC
+            emptyGuidHandle)  // encBaseId
+        |> ignore
+        
+        // Step 4: Add required references similar to C# delta
+        // Add System.Runtime reference as seen in the C# delta
+        let systemRuntimeName = metadataBuilder.GetOrAddString("System.Runtime")
+        let systemRuntimeVersion = System.Version(10, 0, 0, 0)
+        // ECMA public key token for System.Runtime
+        let ecmaPublicKeyTokenBlob = metadataBuilder.GetOrAddBlob([| 
+            0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy 
+        |])
+        
+        let systemRuntimeRef = metadataBuilder.AddAssemblyReference(
+            systemRuntimeName,
+            systemRuntimeVersion,
+            metadataBuilder.GetOrAddString(""), // Empty culture
+            ecmaPublicKeyTokenBlob,
+            AssemblyFlags.PublicKey,  // Use PublicKey flag instead of None
+            BlobHandle())
+        
+        // Add System namespace and Object type reference
         let systemNamespace = metadataBuilder.GetOrAddString("System")
         let objectTypeName = metadataBuilder.GetOrAddString("Object")
-        let objectTypeRef = metadataBuilder.AddTypeReference(systemRuntimeAssemblyRef, systemNamespace, objectTypeName) 
+        let objectTypeRef = metadataBuilder.AddTypeReference(
+            systemRuntimeRef,
+            systemNamespace,
+            objectTypeName)
+        
+        // Add Int32 type reference
         let int32TypeName = metadataBuilder.GetOrAddString("Int32")
-        let _int32TypeRef = metadataBuilder.AddTypeReference(systemRuntimeAssemblyRef, systemNamespace, int32TypeName) 
-        // Add MemberRef for System.Object..ctor() 
-        let ctorName = metadataBuilder.GetOrAddString(".ctor")
-        let ctorSigBuilder = BlobBuilder()
-        let encodeReturn (ret: ReturnTypeEncoder) : unit = ret.Void()
-        let encodeParams (pars: ParametersEncoder) : unit = ()
-        BlobEncoder(ctorSigBuilder).MethodSignature(isInstanceMethod = true).Parameters(0, System.Action<ReturnTypeEncoder> encodeReturn, System.Action<ParametersEncoder> encodeParams)
-        let ctorSigBlob = metadataBuilder.GetOrAddBlob(ctorSigBuilder)
-        let _objectCtorMemberRef = metadataBuilder.AddMemberReference(objectTypeRef, ctorName, ctorSigBlob)
-
-        // 3. Add extra GUIDs found in C# delta
-        let _unknownGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Parse("86d3b3ff-8f3c-44d6-bdea-dc76b2f7c2d1")) // Reversed unknown GUID
-        // Construct ECMA Key GUID manually for GetOrAddGuid
-        let ecmaKeyGuidBytes = [| 0x7Fuy; 0x5Fuy; 0x3Fuy; 0xB0uy; // First 4 bytes reversed
-                                  0xD5uy; 0x11uy; // Next 2 reversed
-                                  0x3Auy; 0x0Auy; // Next 2 reversed
-                                  0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy; 0x00uy |] // Remaining bytes (pad with 0?)
-        let _ecmaKeyGuid = metadataBuilder.GetOrAddGuid(Guid(ecmaKeyGuidBytes))
-
-        // 4. Add TypeDef definition (AFTER References)
-        let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
-        let emptyFieldHandle = FieldDefinitionHandle()
-        let emptyMethodHandle = MethodDefinitionHandle()
-        metadataBuilder.AddTypeDefinition(
-            TypeAttributes.Public, // Using simplified flags from Att #11
-            metadataBuilder.GetOrAddString("SimpleTest"), // Use the type name from the test template
-            metadataBuilder.GetOrAddString("TestApp"), // Use the namespace from the test template
-            objectTypeRef, 
-            emptyFieldHandle, 
-            emptyMethodHandle 
-        ) |> ignore
+        let _int32TypeRef = metadataBuilder.AddTypeReference(
+            systemRuntimeRef,
+            systemNamespace,
+            int32TypeName)
         
-        // 5. Add MethodDef definition 
-        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
-        let emptyParamHandle = ParameterHandle()
-        let methodSignatureBlobHandle = metadataBuilder.GetOrAddBlob(generateMethodSignature())
-        let addedMethodDefHandle = metadataBuilder.AddMethodDefinition(
-            MethodAttributes.Public ||| MethodAttributes.Static ||| MethodAttributes.HideBySig, // Using flags from Att #11
-            MethodImplAttributes.IL,
-            metadataBuilder.GetOrAddString("GetValue"), 
-            methodSignatureBlobHandle, 
-            0, 
-            emptyParamHandle 
-        )
-
-        // 6. Get Handles for EnC tables (TypeDef and MethodDef handles - From Attempt #4/11/13)
-        let typeEntityHandle : EntityHandle = !> typeDefHandle
-        let methodEntityHandle : EntityHandle = !> addedMethodDefHandle // Use handle from AddMethodDefinition
+        // Step 5: Add proper EnC table entries with explicit entity handles
+        // Use implicit conversion via type annotations to convert handles to EntityHandle
+        let typeEntityHandle : EntityHandle = typeDefHandle
+        let methodEntityHandle : EntityHandle = methodDefHandle
         
-        // 7. Add EncMap entries (TypeDef and MethodDef ONLY)
-        metadataBuilder.AddEncMapEntry(typeEntityHandle)
-        metadataBuilder.AddEncMapEntry(methodEntityHandle)
-
-        // 8. Add EncLog entries (TypeDef and MethodDef ONLY) using Default operation
+        // Add entries to the EnC tables - order matters here
         metadataBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default)
         metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
-
-        // 9. Create and serialize the metadata using MetadataRootBuilder
-        let metadataBytes = BlobBuilder()
-        let rootBuilder = MetadataRootBuilder(metadataBuilder)
-        rootBuilder.Serialize(metadataBytes, 1, 0) // Using previous params 
-        let deltaBytes = metadataBytes.ToImmutableArray() 
+        
+        metadataBuilder.AddEncMapEntry(typeEntityHandle)
+        metadataBuilder.AddEncMapEntry(methodEntityHandle)
+        
+        // Step 6: Create metadata root and serialize with correct parameters
+        let metadataRoot = new MetadataRootBuilder(metadataBuilder)
+        let metadataBlob = new BlobBuilder()
+        
+        // Critical: Use correct metadataStreamVersion (1) for EnC deltas
+        metadataRoot.Serialize(metadataBlob, 1, 0)
+        
+        let deltaBytes = metadataBlob.ToImmutableArray()
         printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" deltaBytes.Length
         printfn "[DeltaGenerator] Metadata bytes first 16 bytes: %A" 
             (if deltaBytes.Length >= 16 then deltaBytes.AsSpan().Slice(0, 16).ToArray() else deltaBytes.AsSpan().ToArray())
-        deltaBytes 
+        deltaBytes
 
     /// <summary>
     /// Generates IL delta for a method update.
     /// </summary>
     let private generateILDelta (returnValue: int) =
-        printfn "[DeltaGenerator] Generating IL delta..."
+        printfn "[DeltaGenerator] Generating IL delta for return value: %d" returnValue
         let ilBuilder = new BlobBuilder()
         
-        // For EnC updates, we need to include a valid method body header
-        // For a tiny method format (less than 64 bytes of IL), the header is a single byte:
-        // The format is: (codeSize << 2) | 2
-        // Where the lowest two bits are 10 (0x2) and the upper 6 bits are the code size
+        // Determine IL instructions based on the return value
+        // For small integers that fit in a byte, we can use ldc.i4.s
+        // Otherwise, use ldc.i4 for larger integers
+        let ilInstructions = 
+            if returnValue >= -128 && returnValue <= 127 then
+                // For small integers, use ldc.i4.s (1 byte opcode + 1 byte operand)
+                [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
+            else
+                // For larger integers, use ldc.i4 (1 byte opcode + 4 byte operand)
+                let valueBytes = BitConverter.GetBytes(returnValue)
+                [| 0x20uy; valueBytes.[0]; valueBytes.[1]; valueBytes.[2]; valueBytes.[3]; 0x2Auy |] // ldc.i4 <value>; ret
         
-        // Our IL code is just 2 bytes (ldc.i4.s + ret + operand)
-        let ilInstructions = [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
+        // IL code size (without header)
         let codeSize = ilInstructions.Length
         
-        // Create the tiny format method header: (codeSize << 2) | 2
-        // This tells the runtime that this is a tiny-format method body with 'codeSize' bytes of IL
-        let headerByte = byte ((codeSize <<< 2) ||| 2) // Should be 0x0E for 3 bytes of IL
+        // For tiny method (less than 64 bytes of IL), use tiny header format
+        if codeSize < 64 then
+            // Tiny format: (codeSize << 2) | 0x2
+            let headerByte = byte ((codeSize <<< 2) ||| 0x2)
+            ilBuilder.WriteByte(headerByte)
+            ilBuilder.WriteBytes(ilInstructions)
+        else
+            // Fat format for larger methods (very unlikely in this case)
+            // Flags (1 byte): 0x3 for fat format
+            // Size (1 byte): 0x30 for 3 DWords (12 bytes header)
+            // MaxStack (2 bytes): 8 is sufficient for this simple method
+            // CodeSize (4 bytes): Size of the IL code
+            // LocalVarSig (4 bytes): 0 (no locals)
+            ilBuilder.WriteUInt16(0x3003us) // Flags & Size + MaxStack (0x3 | (0x3 << 2) | (8 << 8))
+            ilBuilder.WriteInt32(codeSize)  // CodeSize
+            ilBuilder.WriteInt32(0)         // LocalVarSig (none)
+            ilBuilder.WriteBytes(ilInstructions)
         
-        // Write the method header followed by the IL code
+        let ilBytes = ilBuilder.ToArray()
+        printfn "[DeltaGenerator] Generated IL delta: %d bytes" ilBytes.Length
+        printfn "[DeltaGenerator] IL delta bytes: %A" ilBytes
+        ImmutableArray.CreateRange(ilBytes)
+
+    /// <summary>
+    /// Generates method body for F# method or InvokeStub
+    /// </summary>
+    let private generateFSharpILDelta (returnValue: int) (isInvokeStub: bool) =
+        printfn "[DeltaGenerator] Generating F# specific IL delta for returnValue=%d (isInvokeStub=%b)" returnValue isInvokeStub
+        
+        let ilBuilder = new BlobBuilder()
+        
+        // For F# methods, the IL is essentially the same whether it's a regular method
+        // or an InvokeStub - we're just pushing an integer value and returning it
+        
+        // Choose the most optimal IL instruction based on return value
+        let ilInstructions = 
+            match returnValue with
+            | 0 -> [| 0x16uy; 0x2Auy |]                           // ldc.i4.0; ret
+            | 1 -> [| 0x17uy; 0x2Auy |]                           // ldc.i4.1; ret
+            | 2 -> [| 0x18uy; 0x2Auy |]                           // ldc.i4.2; ret
+            | 3 -> [| 0x19uy; 0x2Auy |]                           // ldc.i4.3; ret
+            | 4 -> [| 0x1Auy; 0x2Auy |]                           // ldc.i4.4; ret
+            | 5 -> [| 0x1Buy; 0x2Auy |]                           // ldc.i4.5; ret
+            | 6 -> [| 0x1Cuy; 0x2Auy |]                           // ldc.i4.6; ret
+            | 7 -> [| 0x1Duy; 0x2Auy |]                           // ldc.i4.7; ret
+            | 8 -> [| 0x1Euy; 0x2Auy |]                           // ldc.i4.8; ret
+            | -1 -> [| 0x15uy; 0x2Auy |]                          // ldc.i4.m1; ret
+            | n when n >= -128 && n <= 127 -> 
+                [| 0x1Fuy; byte n; 0x2Auy |]                      // ldc.i4.s <value>; ret
+            | n -> 
+                let bytes = BitConverter.GetBytes(n)
+                [| 0x20uy; bytes.[0]; bytes.[1]; bytes.[2]; bytes.[3]; 0x2Auy |]  // ldc.i4 <value>; ret
+        
+        // IL code size (without header)
+        let codeSize = ilInstructions.Length
+        
+        // Use tiny method format (we know our method is small)
+        let headerByte = byte ((codeSize <<< 2) ||| 0x2)
         ilBuilder.WriteByte(headerByte)
         ilBuilder.WriteBytes(ilInstructions)
         
@@ -204,80 +269,67 @@ module DeltaGenerator =
     /// Generates PDB delta for a method update.
     /// </summary>
     let private generatePDBDelta (methodToken: int) =
-        printfn "[DeltaGenerator] Generating PDB delta for method token: %d" methodToken
+        printfn "[DeltaGenerator] Generating PDB delta for method token: 0x%08X" methodToken
         
-        // For simple EnC scenarios with method body updates,
-        // an empty PDB delta with the correct header is often sufficient
-        // because no actual debugging information changes
-        let pdbBuilder = new BlobBuilder()
+        // For our simple POC, we'll generate a more complete PDB delta that matches C# format
+        let debugMetadataBuilder = MetadataBuilder()
         
-        // Standard Portable PDB header with "BSJB" signature
-        pdbBuilder.WriteBytes([|
-            // Magic bytes for Portable PDB ("BSJB")
-            0x42uy; 0x53uy; 0x4Auy; 0x42uy;
-            
-            // Major/Minor version (1.1) - same as in metadata
-            0x01uy; 0x00uy; 
-            0x01uy; 0x00uy;
-            
-            // Reserved (4 bytes of zeros)
-            0x00uy; 0x00uy; 0x00uy; 0x00uy;
-        |])
+        // Create a proper document entry for F#
+        let documentName = debugMetadataBuilder.GetOrAddDocumentName("SimpleTest.fs")
+        let languageGuid = debugMetadataBuilder.GetOrAddGuid(Guid("3F5162F8-07C6-11D3-9053-00C04FA302A1")) // F# language GUID
+        let hashAlgorithm = debugMetadataBuilder.GetOrAddGuid(Guid("8829d00f-11b8-4213-878b-770e8597ac16")) // SHA256
+        let documentHandle = debugMetadataBuilder.AddDocument(
+            documentName,
+            hashAlgorithm,
+            debugMetadataBuilder.GetOrAddBlob(Array.empty), // No hash
+            languageGuid)
         
-        // Version string length and string - using a minimal "v4.0.30319" version string
-        let versionString = "v4.0.30319"
-        let versionStringBytes = System.Text.Encoding.UTF8.GetBytes(versionString + "\0")
-        let paddedLength = (versionStringBytes.Length + 3) / 4 * 4 // round up to nearest multiple of 4
+        // Instead of creating sequence points manually, we'll use an empty blob for now
+        // This will still create a valid PDB delta, but without detailed debugging info
+        let methodHandle = MetadataTokens.MethodDefinitionHandle(methodToken % 0x01000000)
+        let emptySequencePoints = debugMetadataBuilder.GetOrAddBlob(BlobBuilder())
         
-        pdbBuilder.WriteInt32(versionStringBytes.Length)
-        pdbBuilder.WriteBytes(versionStringBytes)
+        // Add method debug information with empty sequence points
+        debugMetadataBuilder.AddMethodDebugInformation(
+            documentHandle,
+            emptySequencePoints)
         
-        // Add padding to align to 4 bytes if needed
-        let padding = paddedLength - versionStringBytes.Length
-        if padding > 0 then
-            pdbBuilder.WriteBytes(Array.zeroCreate padding)
+        // Create portable PDB with proper row counts
+        let pdbBlob = new BlobBuilder()
         
-        // Flags (2 bytes) and stream count (2 bytes) - using 0 for flags and 0 streams
-        // This creates a minimal valid PDB without any actual debug info
-        pdbBuilder.WriteInt16(0s)   // Flags
-        pdbBuilder.WriteInt16(0s)   // StreamCount
+        // Create proper typeSystemRowCounts array (64 elements as required by PortablePdbBuilder)
+        let rowCountsArray = Array.zeroCreate<int>(64) 
         
-        let pdbBytes = pdbBuilder.ToArray()
+        // Method tokens start with 0x06 prefix where 06 is the table index for MethodDef (6)
+        // Set the count for methods to equal the method's row number
+        let methodTableIndex = 6 // MethodDef table index
+        rowCountsArray.[methodTableIndex] <- MetadataTokens.GetRowNumber(methodHandle)
+        
+        // IMPORTANT: For EnC PDB deltas, certain tables must have zero rows
+        // The Document table (#48) must be zero per the error message
+        let documentTableIndex = 48 // Document table index
+        rowCountsArray.[documentTableIndex] <- 0 // Must be 0 for EnC deltas
+        
+        // Set the method debug info table correctly
+        let methodDebugInfoTableIndex = 49 // MethodDebugInformation table index 
+        rowCountsArray.[methodDebugInfoTableIndex] <- 0 // Must be 0 for EnC deltas (not 1)
+        
+        let typeSystemRowCounts = ImmutableArray.Create<int>(rowCountsArray)
+        
+        // Create a PDB builder with proper parameters
+        let pdbBuilder = new PortablePdbBuilder(
+            debugMetadataBuilder,
+            typeSystemRowCounts,
+            MethodDefinitionHandle(), // No entry point
+            null)  // No ID provider
+        
+        pdbBuilder.Serialize(pdbBlob)
+        let pdbBytes = pdbBlob.ToArray()
+        
         printfn "[DeltaGenerator] Generated PDB delta: %d bytes" pdbBytes.Length
         printfn "[DeltaGenerator] PDB delta bytes: %A" 
             (if pdbBytes.Length >= 16 then pdbBytes |> Array.take 16 else pdbBytes)
         ImmutableArray.CreateRange(pdbBytes)
-
-    /// <summary>
-    /// Generates IL delta for F# method
-    /// </summary>
-    let generateFSharpILDelta (returnValue: int) (isInvokeStub: bool) =
-        printfn "[DeltaGenerator] Generating F# specific IL delta for returnValue=%d (isInvokeStub=%b)" returnValue isInvokeStub
-        
-        // The IL will be different depending on if we're targeting an InvokeStub method or a regular F# method
-        if isInvokeStub then
-            // For InvokeStub methods, we need to handle the F# compiler's invocation pattern
-            let ilBuilder = new BlobBuilder()
-            
-            // IL instructions for the method body
-            let ilInstructions = [| 0x1Fuy; byte returnValue; 0x2Auy |] // ldc.i4.s <value>; ret
-            let codeSize = ilInstructions.Length
-            
-            // Create the tiny format method header: (codeSize << 2) | 2
-            let headerByte = byte ((codeSize <<< 2) ||| 2) // 0x0E for 3 bytes
-            
-            // Write the method header followed by the IL code
-            ilBuilder.WriteByte(headerByte)
-            ilBuilder.WriteBytes(ilInstructions)
-            
-            let ilBytes = ilBuilder.ToArray()
-            printfn "[DeltaGenerator] Generated InvokeStub IL delta with header: %d bytes" ilBytes.Length
-            printfn "[DeltaGenerator] InvokeStub IL delta bytes: %A" ilBytes
-            printfn "[DeltaGenerator] IL header byte: 0x%02X (Tiny format, code size: %d)" headerByte codeSize
-            ImmutableArray.CreateRange(ilBytes)
-        else
-            // For regular F# methods, use our improved approach with proper headers
-            generateILDelta returnValue
 
     /// <summary>
     /// Main entry point for generating deltas.
@@ -393,10 +445,11 @@ module DeltaGenerator =
                         printfn "[DeltaGenerator] Targeting regular method (Token: 0x%08X)" methodToken
                         methodToken, declaringTypeToken
                 
-                // Generate minimal metadata and IL deltas
-                printfn "[DeltaGenerator] Generating metadata delta..."
-                // Ensure we're using the same ModuleId as the original assembly
+                // Get the module MVID from the assembly - critical for hot reload success
                 let moduleId = assembly.ManifestModule.ModuleVersionId
+                
+                // Generate deltas
+                printfn "[DeltaGenerator] Generating metadata delta..."
                 let metadataDelta = generateMetadataDelta targetMethodToken targetTypeToken moduleId
                 printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
@@ -410,13 +463,13 @@ module DeltaGenerator =
                 
                 // Create the complete delta
                 let updatedMethods = ImmutableArray.Create<int>(targetMethodToken)
+                let updatedTypes = ImmutableArray.Create<int>(targetTypeToken)
                 
                 // Verify the deltas
                 printfn "[DeltaGenerator] Verifying deltas..."
                 printfn "  - Metadata delta first 16 bytes: %A" (metadataDelta.AsSpan().Slice(0, min 16 metadataDelta.Length).ToArray())
                 printfn "  - IL delta first 16 bytes: %A" (ilDelta.AsSpan().Slice(0, min 16 ilDelta.Length).ToArray())
                 printfn "  - PDB delta first 16 bytes: %A" (pdbDelta.AsSpan().Slice(0, min 16 pdbDelta.Length).ToArray())
-                let updatedTypes = ImmutableArray<int>.Empty
                 
                 printfn "[DeltaGenerator] Generated delta:"
                 printfn "  - Metadata: %d bytes" metadataDelta.Length

@@ -471,10 +471,9 @@ type SimpleLib =
                     // Run mdv analysis on the delta files BEFORE attempting update
                     printfn "[HotReloadTest] Running mdv analysis BEFORE update attempt..."
                     
-                    // Use mdv's auto-discovery feature in the current directory with detailed flags
                     let startInfo = ProcessStartInfo(
                         FileName = "mdv",
-                        Arguments = "0.dll /stats+ /assemblyRefs+ /il+ /md+", // Rely on auto-discovery in working dir
+                        Arguments = "0.dll '/g:1.meta;1.il' /stats+ /assemblyRefs+ /il+ /md+", // Rely on auto-discovery in working dir
                         WorkingDirectory = deltaDir, // Set working directory correctly
                         RedirectStandardOutput = true,
                         UseShellExecute = false,

@@ -110,10 +110,12 @@ module DeltaGenerator =
         let emptyGuidHandle = metadataBuilder.GetOrAddGuid(Guid.Empty)
         
         // Step 3: Add module definition with proper EncId
-        let moduleNameHandle = metadataBuilder.GetOrAddString("SimpleLib")
+        // IMPORTANT: Module name MUST match the original assembly's module name ("0.dll")
+        // Do not use "SimpleLib" or any other name here
+        let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll")
         metadataBuilder.AddModule(
             1,                // generation - set to 1 for delta (this is crucial!)
-            moduleNameHandle, // name
+            moduleNameHandle, // name - must match original module name
             mvidHandle,       // mvid
             encIdHandle,      // encId - critical for EnC
             emptyGuidHandle)  // encBaseId

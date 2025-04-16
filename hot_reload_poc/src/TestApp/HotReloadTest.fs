@@ -13,12 +13,53 @@ open FSharp.Compiler.Text
 open FSharp.Compiler.Symbols
 open HotReloadAgent
 open System.Runtime.CompilerServices
+open Mono.Cecil
 #nowarn FS3261
 
 module HotReloadTest =
     /// Helper to convert byte array to hex string
     let private bytesToHex (bytes: byte[]) =
         System.BitConverter.ToString(bytes).Replace("-", "")
+
+    /// Helper to strip F#-specific metadata resources from an assembly
+    let private stripFSharpMetadata (dllPath: string) =
+        printfn "[HotReloadTest] Attempting to strip F# metadata from: %s" dllPath
+        try
+            let mutable anyChanged = false
+            let readerParameters = ReaderParameters(ReadWrite = true, InMemory = true)
+            use asm = AssemblyDefinition.ReadAssembly(dllPath, readerParameters)
+            
+            let resources = asm.MainModule.Resources
+            let fsharpResourceNames = set [
+                "FSharpOptimizationData.0"; 
+                "FSharpSignatureData.0"; 
+                "FSharpOptimizationInfo.0"; 
+                "FSharpSignatureInfo.0";
+                "FSharpSignatureCompressedData.0";
+                "FSharpSignatureCompressedDataB.0";
+                "FSharpOptimizationCompressedData.0"
+            ]
+
+            // Iterate backwards to safely remove items
+            for i = resources.Count - 1 downto 0 do
+                let resource = resources.[i]
+                if fsharpResourceNames.Contains(resource.Name) then
+                    printfn "[HotReloadTest] Removing F# metadata resource: %s" resource.Name
+                    resources.RemoveAt(i)
+                    anyChanged <- true
+
+            if anyChanged then
+                printfn "[HotReloadTest] Saving stripped assembly back to: %s" dllPath
+                asm.Write()
+                printfn "[HotReloadTest] F# metadata stripping complete."
+            else
+                printfn "[HotReloadTest] No F# metadata resources found to strip."
+            true // Indicate success
+        with
+        | ex -> 
+            printfn "[HotReloadTest] Error stripping F# metadata from %s: %s" dllPath ex.Message
+            printfn "[HotReloadTest] StackTrace: %s" ex.StackTrace
+            false // Indicate failure
 
     /// Template for our test CLASS (changed from module for Attempt #13)
     let testClassTemplate = """
@@ -175,6 +216,13 @@ type SimpleLib =
             match originalResult with
             | None -> return failwith "Failed to compile baseline version"
             | Some (_, (typeName, methodName), compiledBaselinePath) ->
+
+                // ---- START: Strip F# Metadata ----
+                printfn "[HotReloadTest] Stripping F# metadata from baseline DLL..."
+                if not (stripFSharpMetadata compiledBaselinePath) then
+                    return failwith "Failed to strip F# metadata from baseline DLL"
+                // ---- END: Strip F# Metadata ----
+
                 // Use the *compiler's output directory* as the delta directory
                 let deltaDir = Path.GetDirectoryName(compiledBaselinePath)
                 printfn "[HotReloadTest] Using Delta Directory: %s" deltaDir

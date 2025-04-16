@@ -15,6 +15,7 @@ open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Collections.Immutable
 open System.Runtime.CompilerServices
+open System.Runtime.InteropServices // For MemoryMarshal
 open Prelude
 
 #nowarn 3391
@@ -43,7 +44,7 @@ type Delta = {
 /// </summary>
 type DeltaGenerator = {
     /// <summary>The previous compilation result.</summary>
-    PreviousCompilation: FSharpCheckFileResults option
+    PreviousCompilation: FSharp.Compiler.CodeAnalysis.FSharpCheckFileResults option
     /// <summary>The previous return value.</summary>
     PreviousReturnValue: int option
 }
@@ -83,102 +84,152 @@ module DeltaGenerator =
         signatureBytes
 
     /// <summary>
-    /// Generates metadata delta for a method update.
+    /// Generates metadata delta for a method update using a patching approach.
     /// </summary>
-    let private generateMetadataDelta (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
+    let private generateMetadataDelta (baselineDllPath: string) (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
         printfn "[DeltaGenerator] Generating metadata delta for method token: 0x%08X" methodToken
         printfn "[DeltaGenerator] Declaring type token: 0x%08X" declaringTypeToken
         printfn "[DeltaGenerator] Using module ID (MVID): %A" moduleId
         
-        let metadataBuilder = MetadataBuilder()
-        
-        // Set capacity for ENC tables
-        metadataBuilder.SetCapacity(TableIndex.EncLog, 64)
-        metadataBuilder.SetCapacity(TableIndex.EncMap, 64)
+        // --- Step 1: Read baseline module name handle --- 
+        let baselineModuleNameHandleValue =
+            try
+                use fs = File.OpenRead(baselineDllPath)
+                use peReader = new PEReader(fs)
+                let reader = peReader.GetMetadataReader()
+                let moduleDef = reader.GetModuleDefinition()
+                // Get the raw integer token value for the StringHandle
+                let nameHandle = moduleDef.Name
+                // Assume small string heap (handle fits in ushort) for now.
+                // A more robust solution would check reader.StringHeap.Size.
+                let handleValue = MetadataTokens.GetHeapOffset(nameHandle)
+                if handleValue > 0xFFFF then
+                    printfn "[DeltaGenerator] WARNING: Baseline string heap might be large, handle patching assumes small heap."
+                printfn "[DeltaGenerator] Baseline module name handle value: 0x%x" handleValue
+                uint16 handleValue // Return as ushort
+            with ex ->
+                printfn "[DeltaGenerator] ERROR reading baseline module handle: %s" ex.Message
+                0us // Fallback, likely incorrect
 
-        // Step 1: Get proper tokens with correct masking
-        // The token value is composed of table index (high byte) and row index (low 3 bytes)
-        // We need to extract just the row part using a mask
-        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken % 0x01000000)
-        let typeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken % 0x01000000)
+        let deltaBuilder = MetadataBuilder()
         
-        // Step 2: Generate a proper EncId for this delta and get handles
-        // Roslyn generates a *new* unique Guid for each delta. This is the EncId.
+        // Set capacity for ENC tables (doesn't hurt)
+        deltaBuilder.SetCapacity(TableIndex.EncLog, 2)
+        deltaBuilder.SetCapacity(TableIndex.EncMap, 2)
+
+        // --- Step 2: Populate Delta Heaps & Get Handles --- 
+        let dummyNameHandle = deltaBuilder.GetOrAddString("__dummy__") // Dummy name for AddModule
+        let stringHeapSize = deltaBuilder.GetOrAddString("") // Ensure empty string is present if needed
+        let systemRuntimeName = deltaBuilder.GetOrAddString("System.Runtime")
+        let systemNamespace = deltaBuilder.GetOrAddString("System")
+        let objectTypeName = deltaBuilder.GetOrAddString("Object")
+        let int32TypeName = deltaBuilder.GetOrAddString("Int32")
+        let mvidHandle = deltaBuilder.GetOrAddGuid(moduleId)
         let deltaEncId = Guid.NewGuid()
         printfn "[DeltaGenerator] Generated unique delta EncId: %A" deltaEncId
-        let encIdHandle = metadataBuilder.GetOrAddGuid(deltaEncId)
-        
-        // The MVID of the baseline assembly becomes the EncBaseId for the first delta.
-        let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
+        let encIdHandle = deltaBuilder.GetOrAddGuid(deltaEncId)
         let encBaseIdHandle = mvidHandle // Use MVID as EncBaseId for Gen 1 delta
-        
-        // Step 3: Add module definition with proper EncId and EncBaseId
-        // IMPORTANT: Module name MUST match the original assembly's module name ("0.dll")
-        let moduleNameHandle = metadataBuilder.GetOrAddString("0.dll")
-        metadataBuilder.AddModule(
-            1,                 // generation - set to 1 for delta (this is crucial!)
-            moduleNameHandle,  // name - must match original module name
-            mvidHandle,        // mvid - The MVID of the original assembly
-            encIdHandle,       // encId - The *new unique* Guid for this delta
-            encBaseIdHandle)   // encBaseId - The MVID of the original assembly for Gen 1 delta
-        |> ignore
-        
-        // Step 4: Add required references similar to C# delta
-        // Add System.Runtime reference as seen in the C# delta
-        let systemRuntimeName = metadataBuilder.GetOrAddString("System.Runtime")
-        let systemRuntimeVersion = System.Version(10, 0, 0, 0)
-        // ECMA public key token for System.Runtime
-        let ecmaPublicKeyTokenBlob = metadataBuilder.GetOrAddBlob([| 
-            0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy 
-        |])
-        
-        let systemRuntimeRef = metadataBuilder.AddAssemblyReference(
+        let ecmaPublicKeyTokenBlob = deltaBuilder.GetOrAddBlob([| 0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy |])
+
+        // --- Step 3: Add Refs (using deltaBuilder) --- 
+        let systemRuntimeRef = deltaBuilder.AddAssemblyReference(
             systemRuntimeName,
-            systemRuntimeVersion,
-            metadataBuilder.GetOrAddString(""), // Empty culture
+            System.Version(10, 0, 0, 0),
+            stringHeapSize, // Empty culture handle
             ecmaPublicKeyTokenBlob,
-            AssemblyFlags.PublicKey,  // Use PublicKey flag instead of None
-            BlobHandle())
-        
-        // Add System namespace and Object type reference
-        let systemNamespace = metadataBuilder.GetOrAddString("System")
-        let objectTypeName = metadataBuilder.GetOrAddString("Object")
-        let objectTypeRef = metadataBuilder.AddTypeReference(
+            AssemblyFlags.PublicKey, 
+            BlobHandle()) 
+        let objectTypeRef = deltaBuilder.AddTypeReference(
             systemRuntimeRef,
             systemNamespace,
             objectTypeName)
-        
-        // Add Int32 type reference
-        let int32TypeName = metadataBuilder.GetOrAddString("Int32")
-        let _int32TypeRef = metadataBuilder.AddTypeReference(
+        let _int32TypeRef = deltaBuilder.AddTypeReference(
             systemRuntimeRef,
             systemNamespace,
             int32TypeName)
+
+        // --- Step 4: Add Module row (using deltaBuilder, with DUMMY name) ---
+        deltaBuilder.AddModule(
+            1,                 // generation
+            dummyNameHandle,   // Use the dummy name handle
+            mvidHandle,        // mvid
+            encIdHandle,       // encId
+            encBaseIdHandle)   // encBaseId
+        |> ignore
+
+        // --- Step 5: Add EnC table entries (using baseline handles) ---
+        let baselineTypeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken % 0x01000000)
+        let baselineMethodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken % 0x01000000)
+        let typeEntityHandle : EntityHandle = baselineTypeDefHandle
+        let methodEntityHandle : EntityHandle = baselineMethodDefHandle
+        deltaBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default)
+        deltaBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
+        deltaBuilder.AddEncMapEntry(typeEntityHandle)
+        deltaBuilder.AddEncMapEntry(methodEntityHandle)
+
+        // --- Step 6: Serialize the metadata (including the row with the dummy name) ---
+        let rootBuilder = MetadataRootBuilder(deltaBuilder, suppressValidation=true) // Suppress validation for delta
+        let outputBuilder = BlobBuilder()
+        rootBuilder.Serialize(outputBuilder, methodBodyStreamRva = 0, mappedFieldDataStreamRva = 0)
+        let metadataBytes = outputBuilder.ToImmutableArray()
+
+        // --- Step 7: Patch the Module Name Handle --- 
+        // Calculate the offset. This is fragile and depends on MetadataBuilder internal layout.
+        // Offsets are relative to the start of the metadata root.
+        // Header: 4(Magic) + 2(MajorV) + 2(MinorV) + 4(Reserved) + 4(VersionLen) + VersionStrPadded + 2(Flags) + 2(Streams) = Varies! Let's find #~ stream offset.
+        // We need the offset of the #~ stream data, then offset of Module table within that, then offset of Name column.
+        let patchedBytes = 
+            try
+                let bytes = metadataBytes.AsSpan().ToArray() // Correct way to get mutable array
+                // Find #~ stream offset and size from header (assuming 5 streams: #~, #Strings, #US, #Guid, #Blob)
+                // Header structure: Magic(4), MajorV(2), MinorV(2), Reserved(4), VersionLen(4), VersionStr(padded), Flags(2), Streams(2)
+                // Stream Headers: Offset(4), Size(4), Name(padded) 
+                let versionStrLen = System.Text.Encoding.UTF8.GetByteCount(rootBuilder.MetadataVersion) // Use Encoding
+                let versionStrPaddedLen = (versionStrLen + 1 + 3) &&& (~~~3) // +1 for null terminator
+                let streamsHeaderOffset = 4 + 2 + 2 + 4 + 4 + versionStrPaddedLen + 2 + 2
+                
+                // #~ Stream header starts right after Streams(2) count
+                let tildeStreamOffset = BitConverter.ToInt32(bytes, streamsHeaderOffset + 0)
+                // let tildeStreamSize = BitConverter.ToInt32(bytes, streamsHeaderOffset + 4)
+                
+                // #~ stream structure: Reserved(4), MajorV(1), MinorV(1), HeapSizes(1), Reserved(1), ValidMask(8), SortedMask(8), RowCounts(...), Tables(...)
+                let tablesHeaderSize = 4 + 1 + 1 + 1 + 1 + 8 + 8 // Size before row counts
+                
+                // Calculate offset to row counts - need to know how many tables are present (ValidMask)
+                let validMask = BitConverter.ToInt64(bytes, tildeStreamOffset + tablesHeaderSize - 16)
+                let presentTableCount = (
+                    let mutable count = 0
+                    let mutable mask = validMask
+                    for _ in 0..63 do
+                        if (mask &&& 1L) = 1L then count <- count + 1
+                        mask <- mask >>> 1
+                    count)
+                
+                let rowCountsOffset = tildeStreamOffset + tablesHeaderSize
+                let tablesDataOffset = rowCountsOffset + presentTableCount * 4 // Size of row counts section
+
+                // Module table is table 0. It's the first table written after row counts.
+                // ModuleRow: Generation(ushort), Name(StringHandle), MVId(GuidHandle), EncId(GuidHandle), EncBaseId(GuidHandle)
+                // We need the offset of the Name field (2 bytes into the row data).
+                let nameColumnOffset = tablesDataOffset + 2 // Skip Generation (ushort)
+
+                if nameColumnOffset + 1 < bytes.Length then 
+                    printfn "[DeltaGenerator] Patching Module.Name at offset 0x%x with handle 0x%x" nameColumnOffset baselineModuleNameHandleValue
+                    // Assume small string heap (2 bytes for handle) - use MemoryMarshal for safe write
+                    let mutable handleValueToPatch = baselineModuleNameHandleValue // Need mutable for address-of
+                    MemoryMarshal.Write<uint16>(bytes.AsSpan(nameColumnOffset), &handleValueToPatch) // Use & on mutable
+                    ImmutableArray.Create<byte>(bytes) // Explicit type argument
+                else
+                    printfn "[DeltaGenerator] ERROR: Calculated patch offset is out of bounds."
+                    metadataBytes // Return original on error
+            with ex ->
+                printfn "[DeltaGenerator] ERROR patching module name handle: %s" ex.Message
+                metadataBytes // Return original on error
+
+        printfn "[DeltaGenerator] Patched metadata bytes first 16 bytes: %A" 
+            (if patchedBytes.Length >= 16 then patchedBytes.AsSpan().Slice(0, 16).ToArray() else patchedBytes.AsSpan().ToArray())
         
-        // Step 5: Add proper EnC table entries with explicit entity handles
-        // Use implicit conversion via type annotations to convert handles to EntityHandle
-        let typeEntityHandle : EntityHandle = typeDefHandle
-        let methodEntityHandle : EntityHandle = methodDefHandle
-        
-        // Add entries to the EnC tables - order matters here
-        metadataBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default)
-        metadataBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
-        
-        metadataBuilder.AddEncMapEntry(typeEntityHandle)
-        metadataBuilder.AddEncMapEntry(methodEntityHandle)
-        
-        // Step 6: Create metadata root and serialize with correct parameters
-        let metadataRoot = new MetadataRootBuilder(metadataBuilder)
-        let metadataBlob = new BlobBuilder()
-        
-        // Critical: Use correct metadataStreamVersion (1) for EnC deltas
-        metadataRoot.Serialize(metadataBlob, 1, 0)
-        
-        let deltaBytes = metadataBlob.ToImmutableArray()
-        printfn "[DeltaGenerator] Generated metadata bytes: %d bytes" deltaBytes.Length
-        printfn "[DeltaGenerator] Metadata bytes first 16 bytes: %A" 
-            (if deltaBytes.Length >= 16 then deltaBytes.AsSpan().Slice(0, 16).ToArray() else deltaBytes.AsSpan().ToArray())
-        deltaBytes
+        patchedBytes // Return the (potentially) patched bytes
 
     /// <summary>
     /// Generates IL delta for a method update.
@@ -454,7 +505,7 @@ module DeltaGenerator =
                 
                 // Generate deltas
                 printfn "[DeltaGenerator] Generating metadata delta..."
-                let metadataDelta = generateMetadataDelta targetMethodToken targetTypeToken moduleId
+                let metadataDelta = generateMetadataDelta assembly.Location targetMethodToken targetTypeToken moduleId
                 printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
                 printfn "[DeltaGenerator] Generating IL delta..."

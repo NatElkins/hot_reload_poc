@@ -217,11 +217,12 @@ type SimpleLib =
             | None -> return failwith "Failed to compile baseline version"
             | Some (_, (typeName, methodName), compiledBaselinePath) ->
 
-                // ---- START: Strip F# Metadata ----
-                printfn "[HotReloadTest] Stripping F# metadata from baseline DLL..."
-                if not (stripFSharpMetadata compiledBaselinePath) then
-                    return failwith "Failed to strip F# metadata from baseline DLL"
-                // ---- END: Strip F# Metadata ----
+                // Turn off F# metadata stripping for now
+                // // ---- START: Strip F# Metadata ----
+                // printfn "[HotReloadTest] Stripping F# metadata from baseline DLL..."
+                // if not (stripFSharpMetadata compiledBaselinePath) then
+                //     return failwith "Failed to strip F# metadata from baseline DLL"
+                // // ---- END: Strip F# Metadata ----
 
                 // Use the *compiler's output directory* as the delta directory
                 let deltaDir = Path.GetDirectoryName(compiledBaselinePath)

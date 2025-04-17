@@ -18,6 +18,7 @@ open System.Runtime.CompilerServices
 open System.Runtime.InteropServices // For MemoryMarshal
 
 #nowarn 3391
+#nowarn 3261
 
 /// <summary>
 /// Delta structure for hot reload updates.

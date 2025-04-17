@@ -128,9 +128,48 @@ module DeltaGenerator =
 
         printfn "[DeltaGenerator] Using module name: '%s' for delta." baselineModuleName
 
-        // --- Step 2: Create Delta MetadataBuilder and Populate Heaps ---
-        let deltaBuilder = MetadataBuilder()
-
+        // --- Step 2: Create Delta MetadataBuilder with proper heap offsets ---
+        // For EnC deltas, we MUST use the baseline heap sizes as starting offsets!
+        // This ensures references are properly resolved in the delta generation
+        printfn "[DeltaGenerator] Creating MetadataBuilder for EnC delta (Generation 1)"
+        
+        // Read the baseline heap sizes first - we need this to set up the proper offsets
+        let baselineHeapSizes = 
+            try
+                use fs = File.OpenRead(baselineDllPath)
+                use peReader = new PEReader(fs)
+                let reader = peReader.GetMetadataReader()
+                
+                // Get heap sizes from baseline
+                let userStringHeapSize = reader.GetHeapSize(HeapIndex.UserString)
+                let stringHeapSize = reader.GetHeapSize(HeapIndex.String)
+                let blobHeapSize = reader.GetHeapSize(HeapIndex.Blob)
+                let guidHeapSize = reader.GetHeapSize(HeapIndex.Guid)
+                
+                printfn "[DeltaGenerator] Baseline heap sizes: UserString=%d, String=%d, Blob=%d, Guid=%d"
+                    userStringHeapSize stringHeapSize blobHeapSize guidHeapSize
+                    
+                Some (userStringHeapSize, stringHeapSize, blobHeapSize, guidHeapSize)
+            with ex ->
+                printfn "[DeltaGenerator] Failed to read baseline heap sizes: %s" ex.Message
+                None
+        
+        // Create MetadataBuilder with heap offsets from baseline
+        let deltaBuilder =
+            match baselineHeapSizes with
+            | Some(userStringSize, stringSize, blobSize, guidSize) ->
+                printfn "[DeltaGenerator] Creating MetadataBuilder with baseline heap sizes as offsets"
+                MetadataBuilder(
+                    userStringHeapStartOffset = userStringSize,
+                    stringHeapStartOffset = stringSize,
+                    blobHeapStartOffset = blobSize,
+                    guidHeapStartOffset = guidSize)
+            | None ->
+                printfn "[DeltaGenerator] WARNING: Could not read baseline heap sizes, using default offsets"
+                MetadataBuilder()
+        
+        printfn "[DeltaGenerator] Delta MetadataBuilder created with proper heap offsets"
+        
         // Set capacity for ENC tables
         deltaBuilder.SetCapacity(TableIndex.EncLog, 3) // Module, AssemblyRef, TypeRef, MethodDef
         deltaBuilder.SetCapacity(TableIndex.EncMap, 3)
@@ -210,18 +249,29 @@ module DeltaGenerator =
         let baselineMethodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken) // Use original token
         let methodEntityHandle : EntityHandle = baselineMethodDefHandle
 
+        // Based on C# delta output analysis, we need to properly track gen/row for entities
+        
+        // For new AssemblyRef in generation 1 (added by delta)
         printfn "[DeltaGenerator] Adding EncLog/Map entry for new AssemblyRef: %A" assemblyRefEntityHandle
-        deltaBuilder.AddEncLogEntry(assemblyRefEntityHandle, EditAndContinueOperation.Default) // Implicitly 'Add'
+        deltaBuilder.AddEncLogEntry(assemblyRefEntityHandle, EditAndContinueOperation.Default)
         deltaBuilder.AddEncMapEntry(assemblyRefEntityHandle)
-
+        
+        // For new TypeRef in generation 1 (added by delta)
         printfn "[DeltaGenerator] Adding EncLog/Map entry for new TypeRef: %A" typeRefEntityHandle
-        deltaBuilder.AddEncLogEntry(typeRefEntityHandle, EditAndContinueOperation.Default) // Implicitly 'Add'
+        deltaBuilder.AddEncLogEntry(typeRefEntityHandle, EditAndContinueOperation.Default)
         deltaBuilder.AddEncMapEntry(typeRefEntityHandle)
-
+        
+        // For existing method from generation 0 that we're updating
         printfn "[DeltaGenerator] Adding EncLog/Map entry for baseline MethodDef: %A (Token: 0x%08X)" methodEntityHandle methodToken
-        deltaBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default) // 'Update'
+        // Important: We use Default operation which maps to "update" for existing entities
+        deltaBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
         deltaBuilder.AddEncMapEntry(methodEntityHandle)
-        printfn "[DeltaGenerator] EnC Log and Map entries added."
+        
+        printfn "[DeltaGenerator] EnC Log and Map entries added with proper generation handling."
+        printfn "[DeltaGenerator] Dump of entities and their tokens:"
+        printfn "  - AssemblyRef token: 0x%08X" (MetadataTokens.GetToken(assemblyRefEntityHandle))
+        printfn "  - TypeRef token: 0x%08X" (MetadataTokens.GetToken(typeRefEntityHandle)) 
+        printfn "  - MethodDef token: 0x%08X" methodToken
 
         // --- Step 7: Serialize the delta metadata ---
         printfn "[DeltaGenerator] Creating MetadataRootBuilder (suppressValidation=true)..."
@@ -292,12 +342,14 @@ module DeltaGenerator =
     let private generateFSharpILDelta (returnValue: int) (isInvokeStub: bool) =
         printfn "[DeltaGenerator] Generating F# specific IL delta for returnValue=%d (isInvokeStub=%b)" returnValue isInvokeStub
         
+        // Reviewing the C# delta output shows the IL format is very simple:
+        // The IL delta for modifying a method from return 42 to return 43 is just:
+        // ldc.i4.s 43; ret  (without any header)
+        
+        // Create a Builder to hold our IL opcodes
         let ilBuilder = new BlobBuilder()
         
-        // For F# methods, the IL is essentially the same whether it's a regular method
-        // or an InvokeStub - we're just pushing an integer value and returning it
-        
-        // Choose the most optimal IL instruction based on return value
+        // Generate optimized IL instructions for the specific return value
         let ilInstructions = 
             match returnValue with
             | 0 -> [| 0x16uy; 0x2Auy |]                           // ldc.i4.0; ret
@@ -316,18 +368,35 @@ module DeltaGenerator =
                 let bytes = BitConverter.GetBytes(n)
                 [| 0x20uy; bytes.[0]; bytes.[1]; bytes.[2]; bytes.[3]; 0x2Auy |]  // ldc.i4 <value>; ret
         
-        // IL code size (without header)
-        let codeSize = ilInstructions.Length
-        
-        // Use tiny method format (we know our method is small)
-        let headerByte = byte ((codeSize <<< 2) ||| 0x2)
-        ilBuilder.WriteByte(headerByte)
+        // IMPORTANT: For hot reload delta IL, we need to examine exactly what the runtime expects
+        // Let's try without any IL header, just the raw instructions - 
+        // this matches what we see in the C# output with IL opcodes like "ldc.i4.s 43; ret"
         ilBuilder.WriteBytes(ilInstructions)
         
+        // Convert to array and return as immutable
         let ilBytes = ilBuilder.ToArray()
-        printfn "[DeltaGenerator] Generated IL delta with header: %d bytes" ilBytes.Length
+        printfn "[DeltaGenerator] Generated IL delta: %d bytes" ilBytes.Length
         printfn "[DeltaGenerator] IL delta bytes: %A" ilBytes
-        printfn "[DeltaGenerator] IL header byte: 0x%02X (Tiny format, code size: %d)" headerByte codeSize
+        printfn "[DeltaGenerator] IL opcodes: %s" (BitConverter.ToString(ilBytes))
+        
+        // Add extensive logging about the IL format
+        printfn "[DeltaGenerator] IL analysis:"
+        printfn "  - First byte: 0x%02X (%d) - %s" 
+            ilBytes.[0] ilBytes.[0] 
+            (match ilBytes.[0] with
+             | 0x15uy -> "ldc.i4.m1"
+             | 0x16uy -> "ldc.i4.0"
+             | 0x17uy -> "ldc.i4.1"
+             | b when b >= 0x16uy && b <= 0x1Euy -> $"ldc.i4.{int b - int 0x16uy}"
+             | 0x1Fuy -> "ldc.i4.s (followed by 1-byte value)"
+             | 0x20uy -> "ldc.i4 (followed by 4-byte value)"
+             | _ -> "unknown opcode")
+        
+        // Compare with the original IL we saw during inspection
+        printfn "  - Original IL from inspection: 1F-2A-2A (ldc.i4.s 42; ret)"
+        printfn "  - Our new IL: %s" (BitConverter.ToString(ilBytes))
+        printfn "  - C# delta uses raw IL opcodes without header"
+        
         ImmutableArray.CreateRange(ilBytes)
 
     /// <summary>

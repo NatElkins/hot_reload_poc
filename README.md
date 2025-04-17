@@ -4,12 +4,6 @@ To run: `DOTNET_MODIFIABLE_ASSEMBLIES=debug dotnet run --project hot_reload_poc/
 
 Super minimal example of hot reload in F#.  Here's a high level overview of what it does:
 
-Some tools you should have installed:
-
-- https://github.com/dotnet/metadata-tools
-- .NET 10 (I actually don't think you need this, I had it working with 9 at some point but when I most recently tried to switch back to 9 from 10 something broke.  So until I fix that, just use .NET 10)
-- The `csharp_delta_test` folder has to do with using https://github.com/dotnet/hotreload-utils/.  This is what required me to use .NET 10 in the first place.  To get it working I had to clone it locally and build it.  What it will do is generate a dll as well as the 1.il, 1.meta, and 1.pdb files that comprise the patch.
-
 1. Creates an F# dll from a very simple template.  Uses FSharp.Compiler.Services to compile it to disk.
 2. Loads that assembly into an AssemblyLoadContext
 3. Generates a delta patch for the assembly.  This requires manually constructing metadata tables using MetadataBuilder and some hand-written IL.
@@ -264,5 +258,12 @@ Method 'TestApp.SimpleLib.GetValue' (0x06000001)
   IL_0002:  ret
 }
 ```
+
+Some tools you should have installed:
+
+- https://github.com/dotnet/metadata-tools
+- .NET 10 (I actually don't think you need this, I had it working with 9 at some point but when I most recently tried to switch back to 9 from 10 something broke.  So until I fix that, just use .NET 10)
+- The `csharp_delta_test` folder has to do with using https://github.com/dotnet/hotreload-utils/.  This is what required me to use .NET 10 in the first place.  To get it working I had to clone it locally and build it.  What it will do is generate a dll as well as the 1.il, 1.meta, and 1.pdb files that comprise the patch.
+
 
 I suppose if you have questions, feel free to reach me on the F# Discord or open an issue.  I'll do my best to respond.

@@ -87,111 +87,158 @@ module DeltaGenerator =
     /// Generates metadata delta for a method update using a patching approach.
     /// </summary>
     let private generateMetadataDelta (baselineDllPath: string) (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
-        printfn "[DeltaGenerator] --- Generating Metadata Delta ---"
+        printfn "[DeltaGenerator] --- Generating Metadata Delta (Revised) ---"
         printfn "[DeltaGenerator] Baseline DLL Path: %s" baselineDllPath
         printfn "[DeltaGenerator] Method Token: 0x%08X" methodToken
         printfn "[DeltaGenerator] Declaring Type Token: 0x%08X" declaringTypeToken
         printfn "[DeltaGenerator] Module ID (MVID): %A" moduleId
-        
-        // --- Step 1: Read baseline module name --- 
-        // We need the *name* itself, not just the handle value, to add to the delta's string heap.
-        let baselineModuleName =
+
+        // --- Step 1: Read baseline info (Module Name & Method Attributes) ---
+        let baselineModuleName, baselineMethodAttributes, baselineImplAttributes =
             try
                 use fs = File.OpenRead(baselineDllPath)
                 use peReader = new PEReader(fs)
                 let reader = peReader.GetMetadataReader()
+
+                // Read module name
                 let moduleDef = reader.GetModuleDefinition()
                 let nameHandle = moduleDef.Name
                 let moduleName = reader.GetString(nameHandle)
                 printfn "[DeltaGenerator] Successfully read baseline module name: '%s'" moduleName
-                moduleName
+
+                // Read method attributes for the MethodDef row
+                let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
+                let methodDef = reader.GetMethodDefinition(methodDefHandle)
+                let attributes = methodDef.Attributes
+                let implAttributes = methodDef.ImplAttributes
+                printfn "[DeltaGenerator] Baseline method attributes: %A" attributes
+                printfn "[DeltaGenerator] Baseline method impl attributes: %A" implAttributes
+
+                moduleName, attributes, implAttributes
             with ex ->
-                printfn "[DeltaGenerator] ERROR reading baseline module name: %s. Falling back." ex.Message
-                // Fallback to a default name if reading fails. This might cause issues.
-                Path.GetFileName(baselineDllPath) // Use filename as fallback
-                
+                printfn "[DeltaGenerator] ERROR reading baseline info: %s. Falling back." ex.Message
+                let fallbackName = Path.GetFileName(baselineDllPath)
+                // Provide default attributes if reading fails - this might be inaccurate
+                let fallbackAttrs = MethodAttributes.Public ||| MethodAttributes.Static
+                let fallbackImplAttrs = MethodImplAttributes.IL
+                printfn "[DeltaGenerator] Using fallback module name: '%s'" fallbackName
+                printfn "[DeltaGenerator] Using fallback method attributes: %A" fallbackAttrs
+                printfn "[DeltaGenerator] Using fallback method impl attributes: %A" fallbackImplAttrs
+                fallbackName, fallbackAttrs, fallbackImplAttrs
+
         printfn "[DeltaGenerator] Using module name: '%s' for delta." baselineModuleName
 
-        // --- Step 2: Create Delta MetadataBuilder and Populate Essential Heaps --- 
+        // --- Step 2: Create Delta MetadataBuilder and Populate Heaps ---
         let deltaBuilder = MetadataBuilder()
-        
-        // Set capacity for ENC tables (recommended practice for deltas)
-        deltaBuilder.SetCapacity(TableIndex.EncLog, 2) // Example capacity, adjust as needed
-        deltaBuilder.SetCapacity(TableIndex.EncMap, 2) 
+
+        // Set capacity for ENC tables
+        deltaBuilder.SetCapacity(TableIndex.EncLog, 3) // Module, AssemblyRef, TypeRef, MethodDef
+        deltaBuilder.SetCapacity(TableIndex.EncMap, 3)
         printfn "[DeltaGenerator] Delta MetadataBuilder created with ENC table capacities."
 
-        // Add necessary strings, guids, blobs to the DELTA heaps
-        // We *must* add the module name string to the delta's string heap.
-        let moduleNameHandle = deltaBuilder.GetOrAddString(baselineModuleName) 
-        printfn "[DeltaGenerator] Added module name '%s' to delta string heap, handle: %A" baselineModuleName moduleNameHandle
-        // Add baseline MVID and a new delta EncId to the delta GUID heap
+        // Add Guids
         let mvidHandle = deltaBuilder.GetOrAddGuid(moduleId)
-        let deltaEncId = Guid.NewGuid() // Generate a unique ID for this delta
+        let deltaEncId = Guid.NewGuid()
         let encIdHandle = deltaBuilder.GetOrAddGuid(deltaEncId)
-        // For the first generation delta (Gen 1), EncBaseId is the same as the baseline MVID.
-        let encBaseIdHandle = mvidHandle 
+        let encBaseIdHandle = mvidHandle // Baseline MVID for Gen 1 delta
         printfn "[DeltaGenerator] Added Baseline MVID to delta GUID heap, handle: %A" mvidHandle
         printfn "[DeltaGenerator] Generated unique delta EncId: %A" deltaEncId
         printfn "[DeltaGenerator] Added Delta EncId to delta GUID heap, handle: %A" encIdHandle
-        printfn "[DeltaGenerator] Using baseline MVID as EncBaseId handle: %A" encBaseIdHandle
 
-        // --- Step 3: Add Module Row ---
-        // Add the single row to the Module table for this delta.
-        // Use the handles obtained from the *deltaBuilder*.
+        // Add Strings needed for references and MethodDef
+        let moduleNameHandle = deltaBuilder.GetOrAddString(baselineModuleName)
+        let systemRuntimeName = deltaBuilder.GetOrAddString("System.Runtime")
+        let systemNamespace = deltaBuilder.GetOrAddString("System")
+        let objectTypeName = deltaBuilder.GetOrAddString("Object")
+        let methodNameHandle = deltaBuilder.GetOrAddString("GetValue") // Assuming method name is always GetValue for this test
+        printfn "[DeltaGenerator] Added strings to delta string heap: ModuleName, System.Runtime, System, Object, GetValue"
+
+        // Add Blobs needed for references and MethodDef signature
+        let ecmaPublicKeyTokenBlob = deltaBuilder.GetOrAddBlob([| 0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy |])
+        let signatureBytes = generateMethodSignature() // Generate the signature for 'int GetValue()'
+        let signatureBlobHandle = deltaBuilder.GetOrAddBlob(signatureBytes)
+        printfn "[DeltaGenerator] Added ECMA Key and Method Signature to delta blob heap."
+
+        // --- Step 3: Add Core References (AssemblyRef, TypeRef) ---
+        printfn "[DeltaGenerator] Adding AssemblyRef for System.Runtime..."
+        let deltaSystemRuntimeRefHandle = deltaBuilder.AddAssemblyReference(
+            systemRuntimeName,
+            System.Version(10, 0, 0, 0), // Use a relevant version, e.g., net10.0
+            StringHandle(), // Culture handle (nil for invariant) -> Use StringHandle()
+            ecmaPublicKeyTokenBlob,
+            AssemblyFlags.PublicKey,
+            BlobHandle()) // Hash value (nil) -> Use BlobHandle()
+        printfn "[DeltaGenerator] Added AssemblyRef handle: %A" deltaSystemRuntimeRefHandle
+
+        printfn "[DeltaGenerator] Adding TypeRef for System.Object..."
+        let deltaObjectRefHandle = deltaBuilder.AddTypeReference(
+            deltaSystemRuntimeRefHandle,
+            systemNamespace,
+            objectTypeName)
+        printfn "[DeltaGenerator] Added TypeRef handle: %A" deltaObjectRefHandle
+
+        // --- Step 4: Add Module Row ---
         printfn "[DeltaGenerator] Adding Module table row..."
         deltaBuilder.AddModule(
-            1,                 // Generation number (1 for the first delta)
-            moduleNameHandle,  // Handle to the module name *in the delta's string heap*
-            mvidHandle,        // Handle to the baseline MVID *in the delta's GUID heap*
-            encIdHandle,       // Handle to the unique delta ID *in the delta's GUID heap*
-            encBaseIdHandle)   // Handle to the baseline MVID *in the delta's GUID heap*
+            1,                 // Generation number
+            moduleNameHandle,
+            mvidHandle,
+            encIdHandle,
+            encBaseIdHandle)
         |> ignore
         printfn "[DeltaGenerator] Module table row added."
 
-        // --- Step 4: Add EnC table entries ---
-        // Use the original metadata tokens from the baseline assembly.
-        // Convert the full token to the specific handle type.
-        let baselineTypeDefHandle = MetadataTokens.TypeDefinitionHandle(declaringTypeToken)
-        let baselineMethodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
-        printfn "[DeltaGenerator] Baseline TypeDef Handle for EnC: %A (Token: 0x%08X)" baselineTypeDefHandle declaringTypeToken
-        printfn "[DeltaGenerator] Baseline MethodDef Handle for EnC: %A (Token: 0x%08X)" baselineMethodDefHandle methodToken
+        // --- Step 5: Add Method Definition Row ---
+        printfn "[DeltaGenerator] Adding MethodDef row for updated method..."
+        // Use attributes read from baseline. RVA = 1 signifies IL is in the delta.
+        // ParameterList can be ParameterHandle() for methods with no parameters.
+        let deltaMethodDefHandle = deltaBuilder.AddMethodDefinition(
+            attributes = baselineMethodAttributes,
+            implAttributes = baselineImplAttributes,
+            name = methodNameHandle,
+            signature = signatureBlobHandle,
+            bodyOffset = 1, // RVA of 1 indicates IL is in the delta stream (non-zero, small value)
+            parameterList = ParameterHandle())
+        printfn "[DeltaGenerator] Added MethodDef handle: %A" deltaMethodDefHandle
 
-        // It's crucial that these handles correspond to actual entities in the baseline assembly.
-        // We add entries to EncLog and EncMap to signify these baseline entities are part of the update.
-        let typeEntityHandle : EntityHandle = baselineTypeDefHandle
+        // --- Step 6: Add EnC table entries ---
+        // We log/map the *new* entities added to the delta and the *baseline* MethodDef being updated.
+        // We do NOT log/map the baseline TypeDef.
+
+        let assemblyRefEntityHandle : EntityHandle = deltaSystemRuntimeRefHandle
+        let typeRefEntityHandle : EntityHandle = deltaObjectRefHandle
+        let baselineMethodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken) // Use original token
         let methodEntityHandle : EntityHandle = baselineMethodDefHandle
-        
-        printfn "[DeltaGenerator] Adding EncLog entry for TypeDef: %A" typeEntityHandle
-        deltaBuilder.AddEncLogEntry(typeEntityHandle, EditAndContinueOperation.Default) // Default = Modify
-        printfn "[DeltaGenerator] Adding EncLog entry for MethodDef: %A" methodEntityHandle
-        deltaBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default) // Default = Modify
-        
-        printfn "[DeltaGenerator] Adding EncMap entry for TypeDef: %A" typeEntityHandle
-        deltaBuilder.AddEncMapEntry(typeEntityHandle) // Maps baseline token to itself in the delta context
-        printfn "[DeltaGenerator] Adding EncMap entry for MethodDef: %A" methodEntityHandle
-        deltaBuilder.AddEncMapEntry(methodEntityHandle) // Maps baseline token to itself in the delta context
+
+        printfn "[DeltaGenerator] Adding EncLog/Map entry for new AssemblyRef: %A" assemblyRefEntityHandle
+        deltaBuilder.AddEncLogEntry(assemblyRefEntityHandle, EditAndContinueOperation.Default) // Implicitly 'Add'
+        deltaBuilder.AddEncMapEntry(assemblyRefEntityHandle)
+
+        printfn "[DeltaGenerator] Adding EncLog/Map entry for new TypeRef: %A" typeRefEntityHandle
+        deltaBuilder.AddEncLogEntry(typeRefEntityHandle, EditAndContinueOperation.Default) // Implicitly 'Add'
+        deltaBuilder.AddEncMapEntry(typeRefEntityHandle)
+
+        printfn "[DeltaGenerator] Adding EncLog/Map entry for baseline MethodDef: %A (Token: 0x%08X)" methodEntityHandle methodToken
+        deltaBuilder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default) // 'Update'
+        deltaBuilder.AddEncMapEntry(methodEntityHandle)
         printfn "[DeltaGenerator] EnC Log and Map entries added."
 
-        // --- Step 5: Serialize the delta metadata ---
-        // Create the root builder. Suppress validation is important for deltas
-        // as they are not complete, valid metadata tables on their own.
+        // --- Step 7: Serialize the delta metadata ---
         printfn "[DeltaGenerator] Creating MetadataRootBuilder (suppressValidation=true)..."
-        let rootBuilder = MetadataRootBuilder(deltaBuilder, suppressValidation=true) 
-        
+        let rootBuilder = MetadataRootBuilder(deltaBuilder, suppressValidation=true)
+
         let outputBuilder = BlobBuilder()
         printfn "[DeltaGenerator] Serializing delta metadata..."
-        // methodBodyStreamRva and mappedFieldDataStreamRva should be 0 for deltas.
-        rootBuilder.Serialize(outputBuilder, methodBodyStreamRva = 0, mappedFieldDataStreamRva = 0) 
+        rootBuilder.Serialize(outputBuilder, methodBodyStreamRva = 0, mappedFieldDataStreamRva = 0)
         printfn "[DeltaGenerator] Serialization complete."
-        
+
         let metadataBytes = outputBuilder.ToImmutableArray()
         printfn "[DeltaGenerator] Generated metadata delta: %d bytes" metadataBytes.Length
-        printfn "[DeltaGenerator] Metadata delta first 32 bytes: %A" 
+        printfn "[DeltaGenerator] Metadata delta first 32 bytes: %A"
             (if metadataBytes.Length >= 32 then metadataBytes.AsSpan().Slice(0, 32).ToArray() else metadataBytes.AsSpan().ToArray())
-        
-        // --- Step 6: Return the generated bytes ---
-        // No patching needed. The serialized 'metadataBytes' is the final delta.
-        printfn "[DeltaGenerator] --- Metadata Delta Generation Complete ---"
+
+        // --- Step 8: Return the generated bytes ---
+        printfn "[DeltaGenerator] --- Metadata Delta Generation Complete (Revised) ---"
         metadataBytes
 
     /// <summary>

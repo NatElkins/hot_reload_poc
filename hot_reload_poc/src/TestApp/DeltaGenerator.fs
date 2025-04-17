@@ -16,7 +16,6 @@ open System.Reflection.PortableExecutable
 open System.Collections.Immutable
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices // For MemoryMarshal
-open Prelude
 
 #nowarn 3391
 

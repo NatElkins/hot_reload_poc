@@ -11,49 +11,25 @@ open System.Runtime.Loader
 open HotReloadAgent
 
 module Program =
-    // Can be invoked like DOTNET_MODIFIABLE_ASSEMBLIES=debug dotnet run -- test
     // Setting DOTNET_MODIFIABLE_ASSEMBLIES=debug is essential for hot reloading to work
-    // Debug must be set to true and optimize must be set to false as well
     [<EntryPoint>]
     let main argv =
-        match argv with
-        | [| "verify" |] ->
-            DeltaVerification.verifyDeltas()
-            0
-        | [| "test" |] ->
-            HotReloadTest.runTest()
-            |> Async.RunSynchronously
-            0
-        | [| "run" |] ->
-            // Create a custom AssemblyLoadContext that allows updates
-            let alc = new AssemblyLoadContext("HotReloadContext", true)
-            
-            // Load the assembly into our custom context
-            let assembly = alc.LoadFromAssemblyPath(Assembly.GetExecutingAssembly().Location)
-            
-            // Create the hot reload agent
-            let agent = HotReloadAgent.create assembly 42 "TestApp.SimpleTest" "getValue"
-            
-            printfn "Hot Reload Test Application"
-            printfn "=========================="
-            printfn "Current value: %d" (SimpleTest.getValue())
+        // Check if DOTNET_MODIFIABLE_ASSEMBLIES is set correctly
+        let modifiableAssemblies = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+        if modifiableAssemblies <> "debug" then
+            printfn "⚠️ WARNING: DOTNET_MODIFIABLE_ASSEMBLIES is not set to 'debug'."
+            printfn "Hot reload will not work correctly."
             printfn ""
-            printfn "To test hot reload:"
-            printfn "1. Edit SimpleTest.fs and change the return value from 42 to 43"
-            printfn "2. Save the file"
-            printfn "3. The new value should be automatically reflected"
+            printfn "To run with hot reload support on macOS/Linux:"
+            printfn "  DOTNET_MODIFIABLE_ASSEMBLIES=debug dotnet run --project src/TestApp/TestApp.fsproj"
             printfn ""
-            printfn "Press Ctrl+C to exit"
-            printfn "=========================="
+            printfn "To run with hot reload support on Windows (PowerShell):"
+            printfn "  $env:DOTNET_MODIFIABLE_ASSEMBLIES=\"debug\"; dotnet run --project src/TestApp/TestApp.fsproj"
+            printfn ""
+            printfn "Continuing without hot reload capability..."
+            printfn ""
             
-            // Keep the application running and monitoring for changes
-            while true do
-                System.Threading.Thread.Sleep(1000)
-                printfn "Current value: %d" (SimpleTest.getValue())
-            
-            // Clean up (this won't be reached due to the infinite loop, but it's good practice)
-            HotReloadAgent.dispose agent
-            0
-        | _ ->
-            printfn "Usage: TestApp.exe [verify | test | run]"
-            1
+        // Run the hot reload test
+        HotReloadTest.runTest()
+        |> Async.RunSynchronously
+        0

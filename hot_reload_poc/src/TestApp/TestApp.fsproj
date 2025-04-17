@@ -24,7 +24,6 @@
 
   <ItemGroup>
     <Compile Include="DeltaGenerator.fs" />
-    <Compile Include="SimpleTest.fs" />
     <Compile Include="HotReloadTest.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

@@ -179,10 +179,12 @@ module DeltaGenerator =
         let mvidHandle = deltaBuilder.GetOrAddGuid(moduleId)
         let deltaEncId = Guid.NewGuid()
         let encIdHandle = deltaBuilder.GetOrAddGuid(deltaEncId)
-        let encBaseIdHandle = mvidHandle // Baseline MVID for Gen 1 delta
+        // IMPORTANT: Set encBaseIdHandle to empty (null) to match C# delta format
+        let encBaseIdHandle = GuidHandle() // Empty handle, matching C# delta
         printfn "[DeltaGenerator] Added Baseline MVID to delta GUID heap, handle: %A" mvidHandle
         printfn "[DeltaGenerator] Generated unique delta EncId: %A" deltaEncId
         printfn "[DeltaGenerator] Added Delta EncId to delta GUID heap, handle: %A" encIdHandle
+        printfn "[DeltaGenerator] Using null EncBaseId to match C# format"
 
         // Add Strings needed for references and MethodDef
         let moduleNameHandle = deltaBuilder.GetOrAddString(baselineModuleName)
@@ -229,15 +231,24 @@ module DeltaGenerator =
 
         // --- Step 5: Add Method Definition Row ---
         printfn "[DeltaGenerator] Adding MethodDef row for updated method..."
-        // Use attributes read from baseline. RVA = 1 signifies IL is in the delta.
-        // ParameterList can be ParameterHandle() for methods with no parameters.
+        // Use attributes read from baseline, but add HideBySig to match C# attributes
+        let methodAttributes = 
+            if baselineMethodAttributes.HasFlag(MethodAttributes.Static) then
+                // Add HideBySig flag to match C# method attributes
+                baselineMethodAttributes ||| MethodAttributes.HideBySig
+            else
+                baselineMethodAttributes
+        
+        // RVA = 4 (matching C# delta value) signifies IL is in the delta with specific offset
         let deltaMethodDefHandle = deltaBuilder.AddMethodDefinition(
-            attributes = baselineMethodAttributes,
+            attributes = methodAttributes,
             implAttributes = baselineImplAttributes,
             name = methodNameHandle,
             signature = signatureBlobHandle,
-            bodyOffset = 1, // RVA of 1 indicates IL is in the delta stream (non-zero, small value)
+            bodyOffset = 4, // RVA of 4 to match C# delta format
             parameterList = ParameterHandle())
+        
+        printfn "[DeltaGenerator] Using RVA=4 and adding HideBySig attribute to match C# format"
         printfn "[DeltaGenerator] Added MethodDef handle: %A" deltaMethodDefHandle
 
         // --- Step 6: Add EnC table entries ---
@@ -337,14 +348,10 @@ module DeltaGenerator =
         ImmutableArray.CreateRange(ilBytes)
 
     /// <summary>
-    /// Generates method body for F# method or InvokeStub
+    /// Generates method body for F# method or InvokeStub with proper IL method body format
     /// </summary>
     let private generateFSharpILDelta (returnValue: int) (isInvokeStub: bool) =
         printfn "[DeltaGenerator] Generating F# specific IL delta for returnValue=%d (isInvokeStub=%b)" returnValue isInvokeStub
-        
-        // Reviewing the C# delta output shows the IL format is very simple:
-        // The IL delta for modifying a method from return 42 to return 43 is just:
-        // ldc.i4.s 43; ret  (without any header)
         
         // Create a Builder to hold our IL opcodes
         let ilBuilder = new BlobBuilder()
@@ -368,10 +375,48 @@ module DeltaGenerator =
                 let bytes = BitConverter.GetBytes(n)
                 [| 0x20uy; bytes.[0]; bytes.[1]; bytes.[2]; bytes.[3]; 0x2Auy |]  // ldc.i4 <value>; ret
         
-        // IMPORTANT: For hot reload delta IL, we need to examine exactly what the runtime expects
-        // Let's try without any IL header, just the raw instructions - 
-        // this matches what we see in the C# output with IL opcodes like "ldc.i4.s 43; ret"
-        ilBuilder.WriteBytes(ilInstructions)
+        // IL code size (actual instructions without header)
+        let codeSize = ilInstructions.Length
+        
+        // CRITICAL: After examining the C# IL delta, we need to match its exact format
+        // The C# IL delta for a method update has:
+        // 1. Four null bytes (0x00) at the beginning
+        // 2. Tiny format header byte
+        // 3. IL instructions
+        
+        // Write 4 null bytes (RVA offset padding)
+        ilBuilder.WriteInt32(0) // Four null bytes: 00 00 00 00
+        
+        // Constants from MethodBodyBlock.cs:
+        let ILTinyFormat = 0x02uy     // Format flag for tiny method body
+        let ILTinyFormatSizeShift = 2 // Number of bits to shift the size
+                
+        // Check if we can use tiny format (size < 64 bytes, no locals, no exception handlers)
+        if codeSize < 64 then
+            // Create tiny format header: (codeSize << 2) | 0x02
+            // This is exactly what MethodBodyBlock.Create expects to find
+            let headerByte = byte ((codeSize <<< ILTinyFormatSizeShift) ||| int ILTinyFormat)
+            
+            // Write the header byte followed by IL instructions
+            ilBuilder.WriteByte(headerByte)
+            ilBuilder.WriteBytes(ilInstructions)
+            
+            printfn "[DeltaGenerator] Using tiny format IL header (0x%02X): size=%d bytes" headerByte codeSize
+        else
+            // For completeness, though our method is always tiny
+            // Fat format header structure (rarely needed for our scenario):
+            // Flags (2 bytes): Fat format flag (0x3), InitLocals, etc. + Size (3 << 4)
+            // MaxStack (2 bytes): e.g., 8
+            // CodeSize (4 bytes): Size of the IL
+            // LocalVarSigTok (4 bytes): 0 for no locals
+            
+            ilBuilder.WriteUInt16(0x3003us) // Flags & Size (0x03 format flag | 3 << 4 for 12-byte header)
+            ilBuilder.WriteUInt16(8us)      // MaxStack
+            ilBuilder.WriteInt32(codeSize)  // CodeSize
+            ilBuilder.WriteInt32(0)         // LocalVarSigTok (none)
+            ilBuilder.WriteBytes(ilInstructions)
+            
+            printfn "[DeltaGenerator] Using fat format IL header: size=%d bytes" codeSize
         
         // Convert to array and return as immutable
         let ilBytes = ilBuilder.ToArray()
@@ -379,23 +424,36 @@ module DeltaGenerator =
         printfn "[DeltaGenerator] IL delta bytes: %A" ilBytes
         printfn "[DeltaGenerator] IL opcodes: %s" (BitConverter.ToString(ilBytes))
         
-        // Add extensive logging about the IL format
-        printfn "[DeltaGenerator] IL analysis:"
-        printfn "  - First byte: 0x%02X (%d) - %s" 
-            ilBytes.[0] ilBytes.[0] 
-            (match ilBytes.[0] with
-             | 0x15uy -> "ldc.i4.m1"
-             | 0x16uy -> "ldc.i4.0"
-             | 0x17uy -> "ldc.i4.1"
-             | b when b >= 0x16uy && b <= 0x1Euy -> $"ldc.i4.{int b - int 0x16uy}"
-             | 0x1Fuy -> "ldc.i4.s (followed by 1-byte value)"
-             | 0x20uy -> "ldc.i4 (followed by 4-byte value)"
-             | _ -> "unknown opcode")
+        // Add extensive logging about the parsed IL header
+        printfn "[DeltaGenerator] IL header analysis:"
+        let headByte = ilBytes.[0]
+        let isTiny = (headByte &&& 0x03uy) = 0x02uy
         
-        // Compare with the original IL we saw during inspection
-        printfn "  - Original IL from inspection: 1F-2A-2A (ldc.i4.s 42; ret)"
-        printfn "  - Our new IL: %s" (BitConverter.ToString(ilBytes))
-        printfn "  - C# delta uses raw IL opcodes without header"
+        if isTiny then
+            let embeddedSize = int (headByte >>> 2)
+            printfn "  - Format: Tiny (1-byte header)"
+            printfn "  - Header byte: 0x%02X - Format=0x%02X, EmbeddedSize=%d" headByte (headByte &&& 0x03uy) embeddedSize
+            printfn "  - Actual IL size: %d bytes" (ilBytes.Length - 1)
+            
+            // Verify that instructions start at offset 1
+            if ilBytes.Length > 1 then
+                printfn "  - First instruction: 0x%02X at offset 1 (%s)" 
+                    ilBytes.[1]
+                    (match ilBytes.[1] with
+                     | 0x15uy -> "ldc.i4.m1"
+                     | 0x16uy -> "ldc.i4.0"
+                     | 0x17uy -> "ldc.i4.1"
+                     | b when b >= 0x16uy && b <= 0x1Euy -> $"ldc.i4.{int b - int 0x16uy}"
+                     | 0x1Fuy -> "ldc.i4.s (followed by 1-byte value)"
+                     | 0x20uy -> "ldc.i4 (followed by 4-byte value)"
+                     | _ -> "unknown opcode")
+        else
+            printfn "  - Format: Fat format (12-byte header)"
+            // We rarely hit this case for our simple methods
+        
+        // Compare with what we need
+        printfn "  - Required format for MethodBodyBlock.Create: Method body with a header"
+        printfn "  - Our IL is now properly formatted with method body header"
         
         ImmutableArray.CreateRange(ilBytes)
 

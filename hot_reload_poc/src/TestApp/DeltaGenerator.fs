@@ -194,7 +194,7 @@ module DeltaGenerator =
                 // Generation 1 (first delta): EncBaseId MUST be null, based on C# delta analysis.
                 printfn "[DeltaGenerator] Using null EncBaseId handle for first delta generation (Gen 1)"
                 GuidHandle() // Use NULL handle
-            | g when g > 1, Some prevId ->
+            | g, Some prevId when g > 1 ->
                 // Generation 2+: EncBaseId MUST be the EncId of the previous generation.
                 printfn "[DeltaGenerator] Using previous generation's EncId (%A) for EncBaseId (Gen %d)" prevId g
                 deltaBuilder.GetOrAddGuid(prevId) 

@@ -87,25 +87,42 @@ These offsets ensure that all references in the delta metadata correctly resolve
 
 ### 5.2 Module Table
 
-The `Module` table in a delta must have:
-- Generation number = 1 (for first update)
-- A proper EncId (unique GUID for this delta)
-- A null EncBaseId (do NOT set this to the baseline MVID)
+The `Module` table in a delta requires specific values for its generation-tracking columns: `Generation`, `EncId` (Edit and Continue ID), and `EncBaseId` (Edit and Continue Base ID).
+
+-   **`Generation`**: Incremented for each delta (1 for the first delta, 2 for the second, etc.).
+-   **`EncId`**: A new, unique GUID generated for each specific delta generation.
+-   **`EncBaseId`**: Links the delta to the previous generation. Our interpretation, confirmed by analyzing C# deltas using `mdv`, is as follows:
+    -   For the **first delta (Generation 1)** applied to a baseline assembly, `EncBaseId` **must be null**.
+    -   For **subsequent deltas (Generation 2+)**, `EncBaseId` **must be the `EncId` of the immediately preceding delta generation** (e.g., Gen 2's `EncBaseId` is Gen 1's `EncId`).
+
+This specification and the accompanying `DeltaGenerator.fs` example focus on generating the *first* delta (Generation 1).
 
 ```fsharp
 // Create required GUIDs
 let mvidHandle = deltaBuilder.GetOrAddGuid(moduleId) // Baseline MVID
-let deltaEncId = Guid.NewGuid()                      // New unique GUID for this delta
+let deltaEncId = Guid.NewGuid()                      // New unique GUID for this delta (Gen 1)
 let encIdHandle = deltaBuilder.GetOrAddGuid(deltaEncId)
-let encBaseIdHandle = GuidHandle()                   // CRITICAL: Use NULL handle, not baseline MVID
+
+// Determine EncBaseId based on generation
+let encBaseIdHandle = 
+    match generation, previousEncId with // Assuming generation=1, previousEncId=None here
+    | 1, _ -> 
+        // Generation 1: EncBaseId MUST be null.
+        GuidHandle() // Use NULL handle
+    | g when g > 1, Some prevId ->
+        // Generation 2+: Use previous generation's EncId.
+        deltaBuilder.GetOrAddGuid(prevId) 
+    | _, _ -> 
+        // Handle error/unexpected cases
+        GuidHandle() 
 
 // Add Module row
 deltaBuilder.AddModule(
-    1,                 // Generation number
+    1,                 // Generation number (1 for the first delta)
     moduleNameHandle,  // From baseline
     mvidHandle,        // Baseline MVID
-    encIdHandle,       // EncId for this delta
-    encBaseIdHandle)   // NULL EncBaseId
+    encIdHandle,       // EncId for this delta (Gen 1)
+    encBaseIdHandle)   // NULL EncBaseId for Gen 1
 |> ignore
 ```
 
@@ -448,7 +465,7 @@ let methods =
 
 ## 13. Complete F# Delta Generation Implementation
 
-Below is a complete implementation for generating a delta to update an F# method:
+Below is a complete implementation for generating the *first* delta (Generation 1) to update an F# method. Extending this to handle subsequent generations would require tracking the `EncId` of the previous delta and passing it to `generateMetadataDelta`.
 
 ```fsharp
 let generateDelta (assembly: Assembly) (methodToken: int) (typeToken: int) (newReturnValue: int) =
@@ -456,121 +473,18 @@ let generateDelta (assembly: Assembly) (methodToken: int) (typeToken: int) (newR
     let baselineDllPath = assembly.Location
     let moduleId = assembly.ManifestModule.ModuleVersionId
 
-    // Step 2: Create MetadataBuilder with proper heap offsets
-    let deltaBuilder =
-        use fs = File.OpenRead(baselineDllPath)
-        use peReader = new PEReader(fs)
-        let reader = peReader.GetMetadataReader()
+    // Assume we are generating the first delta (Gen 1)
+    let generation = 1
+    let previousEncId = None 
 
-        // Get baseline heap sizes
-        let userStringHeapSize = reader.GetHeapSize(HeapIndex.UserString)
-        let stringHeapSize = reader.GetHeapSize(HeapIndex.String)
-        let blobHeapSize = reader.GetHeapSize(HeapIndex.Blob)
-        let guidHeapSize = reader.GetHeapSize(HeapIndex.Guid)
-
-        // Read module name and method attributes
-        let moduleDef = reader.GetModuleDefinition()
-        let moduleNameString = reader.GetString(moduleDef.Name)
-
-        let methodDefHandle = MetadataTokens.MethodDefinitionHandle(methodToken)
-        let methodDef = reader.GetMethodDefinition(methodDefHandle)
-        let methodAttributes = methodDef.Attributes
-        let methodImplAttributes = methodDef.ImplAttributes
-
-        // Create builder with proper heap sizes
-        let builder = new MetadataBuilder(
-            userStringHeapStartOffset = userStringHeapSize,
-            stringHeapStartOffset = stringHeapSize,
-            blobHeapStartOffset = blobHeapSize,
-            guidHeapStartOffset = guidHeapSize)
-
-        // Set capacities for EnC tables
-        builder.SetCapacity(TableIndex.EncLog, 3)
-        builder.SetCapacity(TableIndex.EncMap, 3)
-
-        // Add necessary strings and blobs
-        let moduleNameHandle = builder.GetOrAddString(moduleNameString)
-        let systemRuntimeName = builder.GetOrAddString("System.Runtime")
-        let systemNamespace = builder.GetOrAddString("System")
-        let objectTypeName = builder.GetOrAddString("Object")
-        let methodNameHandle = builder.GetOrAddString("GetValue")
-
-        // Add method signature blob
-        let signatureBuilder = new BlobBuilder()
-        let encoder = new BlobEncoder(signatureBuilder)
-        encoder.MethodSignature(SignatureCallingConvention.Default, 0, false)
-            .Parameters(0,
-                (fun returnType -> returnType.Type().Int32()),
-                (fun _ -> ()))
-        let signatureBlobHandle = builder.GetOrAddBlob(signatureBuilder.ToArray())
-
-        // Add ECMA public key token
-        let ecmaKeyBlob = builder.GetOrAddBlob([| 0xB0uy; 0x3Fuy; 0x5Fuy; 0x7Fuy; 0x11uy; 0xD5uy; 0x0Auy; 0x3Auy |])
-
-        // Add GUIDs
-        let mvidHandle = builder.GetOrAddGuid(moduleId)
-        let deltaEncId = Guid.NewGuid()
-        let encIdHandle = builder.GetOrAddGuid(deltaEncId)
-        let encBaseIdHandle = GuidHandle() // NULL, not baseline MVID
-
-        // Add references
-        let systemRuntimeRef = builder.AddAssemblyReference(
-            systemRuntimeName,
-            System.Version(10, 0, 0, 0),
-            StringHandle(),
-            ecmaKeyBlob,
-            AssemblyFlags.PublicKey,
-            BlobHandle())
-
-        let objectTypeRef = builder.AddTypeReference(
-            systemRuntimeRef,
-            systemNamespace,
-            objectTypeName)
-
-        // Add Module row
-        builder.AddModule(
-            1,                  // Generation
-            moduleNameHandle,   // Name
-            mvidHandle,         // MVID
-            encIdHandle,        // EncId
-            encBaseIdHandle)    // EncBaseId (NULL)
-        |> ignore
-
-        // Add MethodDef with HideBySig
-        let updatedAttributes =
-            if methodAttributes.HasFlag(MethodAttributes.Static) then
-                methodAttributes ||| MethodAttributes.HideBySig
-            else
-                methodAttributes
-
-        let methodDefHandle = builder.AddMethodDefinition(
-            updatedAttributes,
-            methodImplAttributes,
-            methodNameHandle,
-            signatureBlobHandle,
-            4,  // RVA = 4
-            ParameterHandle())
-
-        // Add EnC entries
-        let assemblyRefEntityHandle = EntityHandle(systemRuntimeRef)
-        let typeRefEntityHandle = EntityHandle(objectTypeRef)
-        let methodEntityHandle = MetadataTokens.EntityHandle(methodToken)
-
-        builder.AddEncLogEntry(assemblyRefEntityHandle, EditAndContinueOperation.Default)
-        builder.AddEncMapEntry(assemblyRefEntityHandle)
-
-        builder.AddEncLogEntry(typeRefEntityHandle, EditAndContinueOperation.Default)
-        builder.AddEncMapEntry(typeRefEntityHandle)
-
-        builder.AddEncLogEntry(methodEntityHandle, EditAndContinueOperation.Default)
-        builder.AddEncMapEntry(methodEntityHandle)
-
-        // Serialize metadata
-        let metadataBlob = new BlobBuilder()
-        let rootBuilder = new MetadataRootBuilder(builder, suppressValidation=true)
-        rootBuilder.Serialize(metadataBlob, methodBodyStreamRva = 0, mappedFieldDataStreamRva = 0)
-
-        metadataBlob.ToImmutableArray()
+    // Step 2: Generate metadata delta (passing generation info)
+    let metadataDelta = generateMetadataDelta 
+        baselineDllPath
+        methodToken
+        declaringTypeToken
+        moduleId
+        generation 
+        previousEncId
 
     // Step 3: Generate IL delta
     let ilDelta =
@@ -645,12 +559,13 @@ let generateDelta (assembly: Assembly) (methodToken: int) (typeToken: int) (newR
 
 ## 14. Conclusion
 
-This specification provides a comprehensive guide for generating metadata, IL, and PDB deltas to support hot reload functionality for F# code in the .NET runtime. By following these guidelines and matching
-the exact format expected by the runtime, developers can implement reliable hot reload capabilities for F# applications.
+This specification provides a comprehensive guide for generating metadata, IL, and PDB deltas to support hot reload functionality for F# code in the .NET runtime. By following these guidelines and matching the exact format expected by the runtime, developers can implement reliable hot reload capabilities for F# applications.
 
 The key requirements are:
 1. Proper heap offsets in metadata
-2. Null `EncBaseId` in the `Module` table
+2. Correct `EncBaseId` handling in the `Module` table:
+    * **Null `EncBaseId`** for the *first delta generation* (Gen 1).
+    * **Previous generation's `EncId`** used as `EncBaseId` for *subsequent generations* (Gen 2+). (Verified via C# delta analysis).
 3. Method RVA value of 4
 4. Adding `HideBySig` to static methods
 5. IL delta with 4-byte padding and correct IL method header
@@ -659,9 +574,3 @@ The key requirements are:
 Adherence to these specifications will ensure compatibility with the .NET runtime's hot reload functionality.
 
 ## 15. References
-
-1. ECMA-335: Common Language Infrastructure (CLI)
-2. `System.Reflection.Metadata` namespace documentation
-3. `System.Reflection.Metadata.MetadataUpdater.ApplyUpdate` API
-4. MethodBodyBlock format specification (ECMA-335 §II.25.4)
-5. Portable PDB format specification

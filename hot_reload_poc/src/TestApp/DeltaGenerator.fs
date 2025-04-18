@@ -84,10 +84,17 @@ module DeltaGenerator =
         signatureBytes
 
     /// <summary>
-    /// Generates metadata delta for a method update using a patching approach.
+    /// Generates metadata delta for a method update, handling EncBaseId based on generation.
     /// </summary>
-    let private generateMetadataDelta (baselineDllPath: string) (methodToken: int) (declaringTypeToken: int) (moduleId: Guid) =
-        printfn "[DeltaGenerator] --- Generating Metadata Delta (Revised) ---"
+    let private generateMetadataDelta 
+        (baselineDllPath: string) 
+        (methodToken: int) 
+        (declaringTypeToken: int) 
+        (moduleId: Guid) 
+        (generation: int) // Added: Current delta generation number (1 for first delta)
+        (previousEncId: Guid option) // Added: EncId of the previous generation (None for Gen 1)
+        =
+        printfn "[DeltaGenerator] --- Generating Metadata Delta (Generation %d) ---" generation
         printfn "[DeltaGenerator] Baseline DLL Path: %s" baselineDllPath
         printfn "[DeltaGenerator] Method Token: 0x%08X" methodToken
         printfn "[DeltaGenerator] Declaring Type Token: 0x%08X" declaringTypeToken
@@ -131,7 +138,7 @@ module DeltaGenerator =
         // --- Step 2: Create Delta MetadataBuilder with proper heap offsets ---
         // For EnC deltas, we MUST use the baseline heap sizes as starting offsets!
         // This ensures references are properly resolved in the delta generation
-        printfn "[DeltaGenerator] Creating MetadataBuilder for EnC delta (Generation 1)"
+        printfn "[DeltaGenerator] Creating MetadataBuilder for EnC delta (Generation %d)" generation
         
         // Read the baseline heap sizes first - we need this to set up the proper offsets
         let baselineHeapSizes = 
@@ -176,15 +183,35 @@ module DeltaGenerator =
         printfn "[DeltaGenerator] Delta MetadataBuilder created with ENC table capacities."
 
         // Add Guids
-        let mvidHandle = deltaBuilder.GetOrAddGuid(moduleId)
-        let deltaEncId = Guid.NewGuid()
+        let mvidHandle = deltaBuilder.GetOrAddGuid(moduleId) // Baseline MVID
+        let deltaEncId = Guid.NewGuid()                     // New EncId for this generation
         let encIdHandle = deltaBuilder.GetOrAddGuid(deltaEncId)
-        // IMPORTANT: Set encBaseIdHandle to empty (null) to match C# delta format
-        let encBaseIdHandle = GuidHandle() // Empty handle, matching C# delta
+        
+        // Determine EncBaseId based on generation
+        let encBaseIdHandle = 
+            match generation, previousEncId with
+            | 1, _ -> 
+                // Generation 1 (first delta): EncBaseId MUST be null, based on C# delta analysis.
+                printfn "[DeltaGenerator] Using null EncBaseId handle for first delta generation (Gen 1)"
+                GuidHandle() // Use NULL handle
+            | g when g > 1, Some prevId ->
+                // Generation 2+: EncBaseId MUST be the EncId of the previous generation.
+                printfn "[DeltaGenerator] Using previous generation's EncId (%A) for EncBaseId (Gen %d)" prevId g
+                deltaBuilder.GetOrAddGuid(prevId) 
+            | g, None when g > 1 ->
+                // Error case: Subsequent generations must have a previous EncId
+                printfn "[DeltaGenerator] ERROR: Generation %d requires previousEncId, but none was provided." g
+                // Returning null handle for now, but this indicates an issue in the calling logic
+                GuidHandle() 
+            | _, _ -> 
+                // Should not happen if generation is always >= 1
+                printfn "[DeltaGenerator] WARNING: Unexpected generation number %d." generation
+                GuidHandle()
+
         printfn "[DeltaGenerator] Added Baseline MVID to delta GUID heap, handle: %A" mvidHandle
-        printfn "[DeltaGenerator] Generated unique delta EncId: %A" deltaEncId
-        printfn "[DeltaGenerator] Added Delta EncId to delta GUID heap, handle: %A" encIdHandle
-        printfn "[DeltaGenerator] Using null EncBaseId to match C# format"
+        printfn "[DeltaGenerator] Generated unique delta EncId for Gen %d: %A" generation deltaEncId
+        printfn "[DeltaGenerator] Added Delta EncId (Gen %d) to delta GUID heap, handle: %A" generation encIdHandle
+        printfn "[DeltaGenerator] EncBaseId handle for Gen %d determined." generation
 
         // Add Strings needed for references and MethodDef
         let moduleNameHandle = deltaBuilder.GetOrAddString(baselineModuleName)
@@ -219,13 +246,13 @@ module DeltaGenerator =
         printfn "[DeltaGenerator] Added TypeRef handle: %A" deltaObjectRefHandle
 
         // --- Step 4: Add Module Row ---
-        printfn "[DeltaGenerator] Adding Module table row..."
+        printfn "[DeltaGenerator] Adding Module table row (Generation %d)..." generation
         deltaBuilder.AddModule(
-            1,                 // Generation number
+            generation,        // Current generation number
             moduleNameHandle,
-            mvidHandle,
-            encIdHandle,
-            encBaseIdHandle)
+            mvidHandle,        // Baseline MVID
+            encIdHandle,       // This generation's EncId
+            encBaseIdHandle)   // Base ID (Null for Gen 1, Prev EncId otherwise)
         |> ignore
         printfn "[DeltaGenerator] Module table row added."
 
@@ -299,7 +326,7 @@ module DeltaGenerator =
             (if metadataBytes.Length >= 32 then metadataBytes.AsSpan().Slice(0, 32).ToArray() else metadataBytes.AsSpan().ToArray())
 
         // --- Step 8: Return the generated bytes ---
-        printfn "[DeltaGenerator] --- Metadata Delta Generation Complete (Revised) ---"
+        printfn "[DeltaGenerator] --- Metadata Delta Generation Complete (Generation %d) ---" generation
         metadataBytes
 
     /// <summary>
@@ -525,10 +552,16 @@ module DeltaGenerator =
 
     /// <summary>
     /// Main entry point for generating deltas.
+    /// Note: This implementation currently only supports generating the first delta (Generation 1).
     /// </summary>
     let generateDelta (generator: DeltaGenerator) (assembly: Assembly) (returnValue: int) (isInvokeStub: bool) (typeName: string) (methodName: string) =
+        // For this example, we assume we are always generating the first delta (Gen 1)
+        // A full implementation would track generation state.
+        let generation = 1
+        let previousEncId = None // No previous EncId for Gen 1
+
         async {
-            printfn "[DeltaGenerator] ===== Starting delta generation ====="
+            printfn "[DeltaGenerator] ===== Starting delta generation (Targeting Generation %d) =====" generation
             printfn "[DeltaGenerator] Assembly: %s" assembly.FullName
             printfn "[DeltaGenerator] Assembly location: %s" assembly.Location
             printfn "[DeltaGenerator] Module ID: %A" assembly.ManifestModule.ModuleVersionId
@@ -640,17 +673,24 @@ module DeltaGenerator =
                 // Get the module MVID from the assembly - critical for hot reload success
                 let moduleId = assembly.ManifestModule.ModuleVersionId
                 
-                // Generate deltas
-                printfn "[DeltaGenerator] Generating metadata delta..."
-                let metadataDelta = generateMetadataDelta assembly.Location targetMethodToken targetTypeToken moduleId
+                // Generate deltas, passing generation info
+                printfn "[DeltaGenerator] Generating metadata delta (Gen %d)..." generation
+                let metadataDelta = 
+                    generateMetadataDelta 
+                        assembly.Location 
+                        targetMethodToken 
+                        targetTypeToken 
+                        moduleId 
+                        generation // Pass current generation
+                        previousEncId // Pass previous EncId (None for Gen 1)
                 printfn "[DeltaGenerator] Metadata delta size: %d bytes" metadataDelta.Length
                 
                 printfn "[DeltaGenerator] Generating IL delta..."
-                let ilDelta = generateFSharpILDelta returnValue isInvokeStub
+                let ilDelta = generateFSharpILDelta returnValue isInvokeStub // IL delta doesn't depend on generation#
                 printfn "[DeltaGenerator] IL delta size: %d bytes" ilDelta.Length
                 
                 printfn "[DeltaGenerator] Generating PDB delta..."
-                let pdbDelta = generatePDBDelta targetMethodToken
+                let pdbDelta = generatePDBDelta targetMethodToken // PDB delta doesn't directly depend on generation# for this simple case
                 printfn "[DeltaGenerator] PDB delta size: %d bytes" pdbDelta.Length
                 
                 // Create the complete delta
@@ -669,7 +709,7 @@ module DeltaGenerator =
                 printfn "  - PDB: %d bytes" pdbDelta.Length
                 printfn "  - Updated methods: %A" updatedMethods
                 printfn "  - Updated types: %A" updatedTypes
-                printfn "[DeltaGenerator] ===== Delta generation complete ====="
+                printfn "[DeltaGenerator] ===== Delta generation complete (Gen %d) =====" generation
                 
                 return Some {
                     ModuleId = moduleId

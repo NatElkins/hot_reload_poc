@@ -3,6 +3,10 @@
     {
       "document": "SimpleLib.cs",
       "update": "SimpleLib_v1.cs"
+    },
+    {
+      "document": "SimpleLib.cs",
+      "update": "SimpleLib_v2.cs"
     }
   ]
 } 

@@ -119,4 +119,4 @@ The `hot_reload_poc/src/csharp_delta_test/` directory contains an example C# pro
 
 ## Questions?
 
-Feel free to reach out on the F# Software Foundation Slack ([join link](https://fsharp.org/guides/slack/)) or open an issue in this repository.
+Come find me on the F# Discord, or open an issue.

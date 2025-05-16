@@ -111,12 +111,9 @@ The `hot_reload_poc/src/csharp_delta_test/` directory contains an example C# pro
 ## Required Tools & Environment
 
 *   **[.NET SDK](https://dotnet.microsoft.com/download):** Tested with .NET 10 SDK. Compatibility with .NET 9 might be possible but requires further testing, especially when using `hotreload-utils`.
-*   **[dotnet/metadata-tools](https://github.com/dotnet/metadata-tools):** Provides `mdv` (Metadata Visualizer). Install as a global tool:
-    ```bash
-    dotnet tool install --global MdView
-    ```
+*   **[dotnet/metadata-tools](https://github.com/dotnet/metadata-tools):** Provides `mdv` (Metadata Visualizer).  See their repo for instructions on installation.
 *   **(Optional) Cloned `dotnet/hotreload-utils` Repository:** Needed for the C# delta generation comparison described above.
 
 ## Questions?
 
-Feel free to reach out on the F# Software Foundation Slack ([join link](https://fsharp.org/guides/slack/)) or open an issue in this repository.
+Come find me on the F# Discord, or open an issue.

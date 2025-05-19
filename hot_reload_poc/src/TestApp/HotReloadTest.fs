@@ -17,6 +17,87 @@ open Mono.Cecil
 #nowarn FS3261
 
 module HotReloadTest =
+    /// Custom AssemblyLoadContext that forces assembly resolution to match the target framework
+    type FrameworkAwareAssemblyLoadContext(name: string) =
+        inherit AssemblyLoadContext(name, isCollectible = true)
+        
+        // Get the target framework from the running assembly
+        let getTargetFramework() =
+            let assembly = Assembly.GetExecutingAssembly()
+            let frameworkName = assembly.GetCustomAttribute<System.Runtime.Versioning.TargetFrameworkAttribute>()
+            if frameworkName <> null then
+                let framework = frameworkName.FrameworkName
+                // Extract version from framework name (e.g., ".NETCoreApp,Version=v9.0")
+                let versionMatch = System.Text.RegularExpressions.Regex.Match(framework, @"Version=v(\d+\.\d+)")
+                if versionMatch.Success then
+                    versionMatch.Groups.[1].Value
+                else
+                    "9.0" // Fallback to 9.0 if we can't parse it
+            else
+                "9.0" // Fallback to 9.0 if we can't find the attribute
+
+        // Find the highest matching runtime version for a given framework version
+        let findRuntimeVersion frameworkVersion =
+            let runtimeBasePath = Path.Combine(
+                (match Environment.GetEnvironmentVariable("DOTNET_ROOT") with
+                | null -> "/usr/local/share/dotnet"
+                | path -> path),
+                "shared",
+                "Microsoft.NETCore.App"
+            )
+            
+            if Directory.Exists(runtimeBasePath) then
+                // Get all runtime versions that start with our framework version
+                let matchingVersions = 
+                    Directory.GetDirectories(runtimeBasePath)
+                    |> Array.filter (fun dir -> 
+                        let version = Path.GetFileName(dir)
+                        version.StartsWith(frameworkVersion + ".")
+                    )
+                    |> Array.sortByDescending Path.GetFileName
+                
+                if matchingVersions.Length > 0 then
+                    // Return the highest version number
+                    Path.GetFileName(matchingVersions.[0])
+                else
+                    frameworkVersion
+            else
+                frameworkVersion
+        
+        override this.Load(assemblyName: AssemblyName) =
+            let targetFramework = getTargetFramework()
+            let runtimeVersion = findRuntimeVersion targetFramework
+            printfn "[FrameworkAwareAssemblyLoadContext] Target framework: %s" targetFramework
+            printfn "[FrameworkAwareAssemblyLoadContext] Using runtime version: %s" runtimeVersion
+            printfn "[FrameworkAwareAssemblyLoadContext] Attempting to load assembly: %s (Version: %s)" 
+                assemblyName.Name 
+                (assemblyName.Version.ToString())
+            
+            // Try to load from the target framework runtime directory first
+            let runtimePath = Path.Combine(
+                (match Environment.GetEnvironmentVariable("DOTNET_ROOT") with
+                | null -> "/usr/local/share/dotnet"
+                | path -> path),
+                "shared",
+                "Microsoft.NETCore.App",
+                runtimeVersion
+            )
+            
+            printfn "[FrameworkAwareAssemblyLoadContext] Looking in runtime path: %s" runtimePath
+            
+            if Directory.Exists(runtimePath) then
+                let assemblyPath = Path.Combine(runtimePath, $"{assemblyName.Name}.dll")
+                if File.Exists(assemblyPath) then
+                    printfn "[FrameworkAwareAssemblyLoadContext] Found assembly in runtime: %s" assemblyPath
+                    this.LoadFromAssemblyPath(assemblyPath)
+                else
+                    printfn "[FrameworkAwareAssemblyLoadContext] Assembly not found in runtime: %s" assemblyPath
+                    printfn "[FrameworkAwareAssemblyLoadContext] Falling back to default loading behavior for: %s" assemblyName.Name
+                    base.Load(assemblyName)
+            else
+                printfn "[FrameworkAwareAssemblyLoadContext] Falling back to default loading behavior for: %s" assemblyName.Name
+                base.Load(assemblyName)
+
     /// Helper to convert byte array to hex string
     let private bytesToHex (bytes: byte[]) =
         System.BitConverter.ToString(bytes).Replace("-", "")
@@ -155,8 +236,8 @@ type SimpleLib =
     /// Runs the hot reload test
     let runTest () =
         async {
-            // Create a custom AssemblyLoadContext that allows updates
-            let alc = new AssemblyLoadContext("HotReloadContext", isCollectible = true)
+            // Create a custom AssemblyLoadContext that forces assembly resolution to match target framework
+            let alc = new FrameworkAwareAssemblyLoadContext("HotReloadContext")
             
             // Create temporary directory for our test files
             let tempDir = Path.Combine(Path.GetTempPath(), "HotReloadTest")

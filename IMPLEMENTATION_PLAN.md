@@ -169,4 +169,4 @@ Each task must:
   - Output consumed by `IlxDeltaEmitter` and future `FSharpSymbolMatcher` to build deltas.
 - **Context**: Roslyn’s `DefinitionMap`, `SymbolChanges`, `AddedOrChangedMethodInfo`.
 - **Follow-up**: Design `FSharpSynthesizedTypeMaps` and ensure `FSharpEmitBaseline` persists synthesized member metadata for reuse.
-- **Status**: In progress — initial `FSharpDefinitionMap` module and component tests (covering added/updated/deleted/type edits) are implemented; integration with synthesized-member tracking and rude-edit diagnostics remains outstanding.
+- **Status**: Completed (2025-10-30) — `TypedTreeDiff` annotates `SymbolId`/`SemanticEdit` with synthesis info, `FSharpDefinitionMap` surfaces synthesized helpers, and `FSharpSymbolChanges` aggregates the data with component coverage in `SymbolChangesTests.fs`.

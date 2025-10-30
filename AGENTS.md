@@ -35,6 +35,7 @@ Keep commits focused and descriptive in sentence case (see `git log --oneline` f
   - `ARCHITECTURE_PROPOSAL.md`, `IMPLEMENTATION_PLAN.md` (overall design & milestones)
   - Compiler sources under `src/Compiler/**`, especially `CodeGen/IlxGen.fs`, `AbstractIL/ilwrite.fs`, `TypedTree/**`
   - Hot reload baseline helpers: `src/Compiler/CodeGen/HotReloadBaseline.fs[si]` (baseline capture) and component coverage in `tests/FSharp.Compiler.ComponentTests/HotReload/BaselineTests.fs`
-  - Test harness directories under `tests/`
+- Test harness directories under `tests/`
 - Documentation practice: when introducing new public types or functions add XML documentation comments and prefer explanatory inline comments for non-obvious logic.
+- Full-suite testing is time-consuming on local machines; run targeted checks (`./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`) during iteration and reserve `./build.sh --testcoreclr --testCompilerComponentTests --testScripting` for validation, noting that several legacy IL baselines currently fail until updated.
 - **General build command**: `./.dotnet/dotnet build FSharp.sln -c Debug` (feature flag off by default).

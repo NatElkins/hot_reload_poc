@@ -3,6 +3,7 @@
 This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. Each task is scoped so that a single LLM-focused iteration can complete it while keeping the repository in a buildable, backwards-compatible state. After every task, run the full build (`dotnet build FSharp.sln` or `build.cmd`) and applicable test suites.
 
 - Reminder: After completing each task, update this plan and capture any follow-up adjustments in both IMPLEMENTATION_PLAN.md and ARCHITECTURE_PROPOSAL.md.
+- Testing guidance: the full component suite is time-consuming (10+ minutes). For day-to-day iteration run `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload` and reserve the full suite for validation runs.
 
 ## Milestone 1 – Baseline Capture & Semantic Diff Infrastructure
 
@@ -34,6 +35,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Build unaffected when hot reload disabled.
 - **Context**: `src/Compiler/AbstractIL/ilwrite.fs` and Roslyn `EmitBaseline.cs`.
 - **Status**: Completed (2025-10-30). Baseline capture module and component tests implemented; metadata snapshot plumbed via IL writer helpers.
+- **Follow-up**: Extend baseline capture to persist EncLog/EncMap rows alongside `MetadataSnapshot` once delta emission work begins.
 
 ### Task 1.4 – IlxGenEnv Snapshotting
 - **Scope**: Persist minimal `IlxGenEnv` required for delta emission.

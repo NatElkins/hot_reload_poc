@@ -248,6 +248,7 @@
    `ILBinaryWriter` returns deterministic token maps (`ILTokenMappings` in `src/Compiler/AbstractIL/ilwrite.fs:632-646`) and stores method lookup closures (`MethodDefTokenMap` at `:643`, `:3199`). `FSharpEmitBaseline` serializes these along with heap lengths so the delta emitter can reuse `FindMethodDefIdx` (`:1095-1149`) without rerunning all emit passes.
    - Implementation note: `WriteILBinaryInMemoryWithArtifacts` now surfaces `(assemblyBytes, pdbBytes, ILTokenMappings, MetadataSnapshot)` by threading a metadata-capture sink through `writeBinaryAux`. `HotReloadBaseline.create` consolidates this snapshot with token maps into the persisted baseline state.
    - Component coverage: `tests/FSharp.Compiler.ComponentTests/HotReload/BaselineTests.fs` validates method/field/property/event token stability across identical emissions, preventing regressions in the new baseline capture path.
+   - Current limitation: we do not yet persist EncLog/EncMap entries alongside the baseline snapshot. Delta work that needs to reconcile edit maps must extend the writer to surface those tables (open question tracked for Milestone 2).
 
 4. **Lifecycle of `IlxGenEnv` snapshots**  
    The environment record at `src/Compiler/CodeGen/IlxGen.fs:1185-1293` captures tyenv, value storage, remap info, and delayed codegen queues. We intercept `GenerateCode` (`:12040-12120`) to clone the final environment into the baseline, persisting only the minimal fields needed for delta generation and restoring them when emitting subsequent edits.

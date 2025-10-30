@@ -147,7 +147,7 @@
 
 | Roslyn Structure | Purpose | F# Equivalent | Notes |
 | --- | --- | --- | --- |
-| `EmitBaseline` (src/Compilers/Core/Portable/EditAndContinue/EmitBaseline.cs) | Persists metadata heaps, EncLog/EncMap, and definition handles for delta comparisons. | `FSharpEmitBaseline` (src/Compiler/CodeGen/HotReloadBaseline.fs) | New helper captures `MetadataSnapshot` (heap lengths, table row counts) and stable token maps via `HotReloadBaseline.create`, mirroring Roslyn’s baseline semantics. Used by `WriteILBinaryInMemoryWithArtifacts` to surface baseline state when hot reload is enabled. |
+| `EmitBaseline` (src/Compilers/Core/Portable/EditAndContinue/EmitBaseline.cs) | Persists metadata heaps, EncLog/EncMap, and definition handles for delta comparisons. | `FSharpEmitBaseline` (src/Compiler/CodeGen/HotReloadBaseline.fs) | New helper captures `MetadataSnapshot` (heap lengths, table row counts) and stable token maps via `HotReloadBaseline.create`, with `createWithEnvironment` persisting the `IlxGenEnvSnapshot` when a hot reload session is active. Used by `WriteILBinaryInMemoryWithArtifacts` to surface baseline state when hot reload is enabled. |
 | `DefinitionMap.MetadataLambdasAndClosures` (src/Compilers/Core/Portable/Emit/EditAndContinue/DefinitionMap.cs#L12) | Caches lambda/debug closure IDs for mapping updated methods to prior generated names. | `HotReloadNameMap` (src/Compiler/TypedTree/HotReloadNameMap.fs) | HotReloadNameMap should mirror Roslyn by providing stable names for compiler-generated lambdas/closures. Consider future rename (e.g., `LambdaClosureNameMap`) to align terminology. |
 
 - `HotReloadNameMap`
@@ -237,6 +237,7 @@
 | Scenario | Tooling | Notes |
 | --- | --- | --- |
 | Baseline vs. delta layout regression | `mdv` (metadata-tools) | Run `mdv /g:<metadata delta>;<il delta>` on every generated pair to confirm EncLog/EncMap and ECMA-335 table invariants (mirrors Roslyn ENC tests). Integrate into HotReloadTest and component suites. |
+| Hot reload flag handshake | `tests/FSharp.Compiler.ComponentTests/HotReload/BaselineTests.fs` | Mirrors Roslyn's `EmitBaseline` smoke tests by driving a CLI build with `--enable:hotreloaddeltas` and asserting the captured baseline (via `HotReloadState.tryGetBaseline`) preserves the ILX environment snapshot. |
 
 1. **Typed tree diffing strategy**  
    `TypedTreeDiff` will compare the stamps already assigned to every definition (`Stamp`, `StampMap` in `src/Compiler/TypedTree/TypedTree.fs:40` and the per-entity stamp fields at `:641` and `:2781`). We cache `CheckedImplFile` values per document (`:5612`) and reuse the incremental build pipeline (`src/Compiler/Service/IncrementalBuild.fs:956-1150`) to retrieve both prior and current `ModuleOrNamespaceType`/`ModuleOrNamespaceContents`. Matching by stamp plus qualified name keeps edits deterministic across partial re-checks.
@@ -246,12 +247,15 @@
 
 3. **Capturing baseline token state**  
    `ILBinaryWriter` returns deterministic token maps (`ILTokenMappings` in `src/Compiler/AbstractIL/ilwrite.fs:632-646`) and stores method lookup closures (`MethodDefTokenMap` at `:643`, `:3199`). `FSharpEmitBaseline` serializes these along with heap lengths so the delta emitter can reuse `FindMethodDefIdx` (`:1095-1149`) without rerunning all emit passes.
-   - Implementation note: `WriteILBinaryInMemoryWithArtifacts` now surfaces `(assemblyBytes, pdbBytes, ILTokenMappings, MetadataSnapshot)` by threading a metadata-capture sink through `writeBinaryAux`. `HotReloadBaseline.create` consolidates this snapshot with token maps into the persisted baseline state.
+- Implementation note: `WriteILBinaryInMemoryWithArtifacts` now surfaces `(assemblyBytes, pdbBytes, ILTokenMappings, MetadataSnapshot)` by threading a metadata-capture sink through `writeBinaryAux`. `HotReloadBaseline.create` consolidates this snapshot with token maps, while `createWithEnvironment` threads the `IlxGenEnvSnapshot` captured by `GenerateCode` so the delta emitter can rehydrate its codegen state.
    - Component coverage: `tests/FSharp.Compiler.ComponentTests/HotReload/BaselineTests.fs` validates method/field/property/event token stability across identical emissions, preventing regressions in the new baseline capture path.
    - Current limitation: we do not yet persist EncLog/EncMap entries alongside the baseline snapshot. Delta work that needs to reconcile edit maps must extend the writer to surface those tables (open question tracked for Milestone 2).
 
 4. **Lifecycle of `IlxGenEnv` snapshots**  
    The environment record at `src/Compiler/CodeGen/IlxGen.fs:1185-1293` captures tyenv, value storage, remap info, and delayed codegen queues. We intercept `GenerateCode` (`:12040-12120`) to clone the final environment into the baseline, persisting only the minimal fields needed for delta generation and restoring them when emitting subsequent edits.
+   The baseline capture path now routes through `HotReloadBaseline.createWithEnvironment`, allowing us to opt-in to environment persistence only when the `--enable:hotreloaddeltas` feature flag is set; the default build continues to call `create` so non-hot-reload scenarios avoid the additional snapshot cost.
+   F# CLI tooling now recognises `--enable:hotreloaddeltas`, wiring `main6` to emit `FSharpEmitBaseline` via `HotReloadState`. Tooling (e.g., dotnet-watch) can query `HotReloadState.tryGetBaseline()` after a build has completed to mirror Roslyn's `EmitBaseline` handoff.
+   Current gap: automation still needs a reflection-based harness (or an exposed factory API) to validate `snapshotIlxGenEnv`/`restoreIlxGenEnv`; this is tracked in the implementation plan under Task 1.4 follow-ups.
 
 5. **Early rude-edit detection**  
    Inline/mutability changes are read straight from `ValFlags.InlineInfo` and related helpers (`src/Compiler/TypedTree/TypedTree.fs:132-210`), while union layout is inspected via each tycon’s `TypeContents`. `TypedTreeDiff` flags edits that would alter metadata shape (inline flips, union case additions, signature changes) before IL is emitted, forcing a full rebuild in those scenarios.

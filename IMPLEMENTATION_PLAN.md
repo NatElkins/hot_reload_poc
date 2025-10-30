@@ -44,7 +44,8 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Acceptance Criteria**:
   - Unit tests `tests/FSharp.Compiler.UnitTests/HotReload/IlxGenEnvTests.fs` ensure restored environments produce identical IL for unchanged edits.
 - **Context**: `IlxGen.fs:1185-1293`, ILX pipeline.
-- **Status**: In progress (snapshot helpers wired through `IlxGenResults` and `FSharpEmitBaseline`; restoration logic pending integration with delta emitter work).
+- **Status**: Completed (2025-10-30). Snapshot helpers are threaded through `IlxGenResults`, and `HotReloadBaseline.createWithEnvironment` carries the captured environment when the hot reload feature flag is enabled.
+- **Follow-up**: Expose a test harness (reflection or public factory) so we can re-enable `IlxGenEnv` restoration tests before Milestone 2 work begins.
 
 ## Milestone 2 – Delta Emission & Rude Edit Diagnostics
 

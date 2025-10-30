@@ -486,6 +486,7 @@ These defaults should be revisited with stakeholders as implementation progresse
    - Use `MethodDefTokenMap` to retrieve existing tokens; only add rows when structure changes (`AddMethodDefinition` etc.).
    - Populate `EncLog`/`EncMap` entries with stable `SymbolId` references.
    - Build IL delta by writing method bodies (with 4-byte padding) into a `BlobBuilder` keyed by `MethodDefinitionHandle`.
+   - Leverage `FSharpSymbolMatcher` and `FSharpDefinitionMap` to map existing synthesized members, closures, and async state machines.
 5. **Emit PDB Delta**: gather updated sequence points from ILX instrumentation, feed into `FSharpPdbDeltaBuilder`.
 6. **Package Update**: produce `IlxDelta`, wrap into `ManagedHotReloadUpdate` (with diagnostics). Send to runtime via `MetadataUpdater.ApplyUpdate`.
 7. **Update Baseline**: merge delta into `FSharpEmitBaseline` (increment `encId`, table sizes, method map).
@@ -534,3 +535,6 @@ These defaults should be revisited with stakeholders as implementation progresse
 - Draft typed-tree diff utilities producing `FSharpSemanticEdit` records for simple method-body updates.
 - Investigate a minimal `IlxDeltaEmitter` that reuses `MethodDefTokenMap` to emit a single updated method delta.
 - Coordinate with Roslyn EnC maintainers on DefinitionMap parity requirements and runtime constraints.
+- **Definition map and semantic edit classification**: Roslyn’s `DefinitionMap` and `SymbolChanges` capture per-symbol edit states (Added/Updated/Deleted/Rude) and drive edit diagnostics. F# needs an analogous `FSharpDefinitionMap`/`FSharpSymbolChanges` layered on `TypedTreeDiff`, preserving synthesized members and feeding the delta emitter.
+- **Synthesized type/member tracking**: reusable structures similar to `SynthesizedTypeMaps` must record anonymous types, delegates, closures, async state machines, computation expression scaffolding, and `PrivateImplementationDetails` generated in each generation.
+- **Variable slot allocator**: Roslyn’s `EncVariableSlotAllocator` maintains local slots/hoisted locals for method bodies. F# must track ILX locals (including async/state machine fields) so debugger state and metadata stay consistent across deltas; prototype a dedicated allocator to reuse slots.

@@ -69,6 +69,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Context**: Roslyn `DeltaMetadataWriter.cs`, `EmitDifferenceResult`.
 - **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection and the metadata-tools (`mdv`) CLI handshake, establishing the harness for future binary delta verification. Next increment will replace the stub with real metadata/IL/PDB delta emission validated via `mdv`.
 - **Follow-up**: Design and implement AbstractIL delta-writing support (EncLog/EncMap/table slicing) before enabling non-placeholder emission.
+- **Follow-up**: Integrate variable slot allocator/local mapping once method body re-emission is implemented.
 
 ### Task 2.2 – Rude Edit Classification
 - **Scope**: Extend `TypedTreeDiff` to label unsupported edits.
@@ -104,6 +105,15 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Unit/component tests covering closure/async state-machine edits confirm tokens are reused across generations.
   - Matcher feeds `IlxDeltaEmitter` with maps analogous to Roslyn’s `SynthesizedTypeMaps` and `SymbolChanges`.
 - **Context**: Mirrors Roslyn’s `SymbolMatcher`/`CSharpSymbolMatcher`; prerequisite for accurate metadata deltas.
+
+### Task 2.6 – HotReload Session Orchestrator
+- **Scope**: Implement `FSharpHotReloadSession` (CLI/IDE services) coordinating edit detection, semantic analysis, delta emission, apply, and baseline updates.
+- **Files/Modules**: new `HotReloadSession.fs`, integrations in `fsc.fs`, future IDE bridge modules.
+- **Objective**: Mirror Roslyn’s `EditSession`/`ManagedHotReloadLanguageService`—queue edits, handle cancellation, surface diagnostics, apply deltas, update baselines.
+- **Acceptance Criteria**:
+  - CLI experiment using `--enable:hotreloaddeltas` can apply method-body deltas end-to-end (including baseline update) with logging.
+  - Hook points ready for IDE consumers (VS/dotnet-watch).
+- **Context**: Roslyn `EditSession`, `ManagedHotReloadLanguageService`, `EmitSolutionUpdate` workflow.
 
 ## Milestone 3 – Tooling & API Surface
 
@@ -148,3 +158,14 @@ Each task must:
 - Reference the relevant code locations and resources for context.
 
 - After completing each task update this plan with the task status and capture any lessons for ARCHITECTURE_PROPOSAL.md/IMPLEMENTATION_PLAN.md.
+- **Follow-up**: Coordinate with SymbolMatcher work to ensure newly stabilized names are consumed when remapping definitions.
+
+### Task 1.6 – Definition Map & Semantic Edit Classification
+- **Scope**: Build `FSharpDefinitionMap`/`FSharpSymbolChanges` to track Added/Updated/Deleted/Rude edits and synthesized members.
+- **Files/Modules**: `TypedTreeDiff.fs`, new `DefinitionMap.fs`, `RudeEditDiagnostics.fs`.
+- **Objective**: Classify edits per symbol (including synthesized constructs) and provide rude-edit diagnostics prior to delta emission.
+- **Acceptance Criteria**:
+  - Unit tests mirror Roslyn `EditAndContinueAnalyzerTests` scenarios (method body update, inline change rude edit, union shape change, missing symbol).
+  - Output consumed by `IlxDeltaEmitter` and future `FSharpSymbolMatcher` to build deltas.
+- **Context**: Roslyn’s `DefinitionMap`, `SymbolChanges`, `AddedOrChangedMethodInfo`.
+- **Follow-up**: Design `FSharpSynthesizedTypeMaps` and ensure `FSharpEmitBaseline` persists synthesized member metadata for reuse.

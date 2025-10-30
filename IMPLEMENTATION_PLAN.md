@@ -58,14 +58,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Ensure `EncLog`/`EncMap` tracking implemented.
   - HotReloadTest orchestrates mdv verification in CI.
 - **Context**: Roslyn `DeltaMetadataWriter.cs`, `EmitDifferenceResult`.
-
-- **Scope**: Build `IlxDeltaEmitter` to produce metadata/IL/PDB deltas.
-- **Files/Modules**: new `src/Compiler/CodeGen/IlxDeltaEmitter.fs`, integrate into hot-reload workflow.
-- **Objective**: Given baseline state and semantic edits, emit delta blobs ready for `MetadataUpdater.ApplyUpdate`.
-- **Acceptance Criteria**:
-  - Component tests `tests/FSharp.Compiler.ComponentTests/HotReload/DeltaEmitterTests.fs` validate emitted blobs match expected mdv output for method-body edits.
-  - Ensure `EncLog`/`EncMap` tracking implemented.
-- **Context**: Roslyn `DeltaMetadataWriter.cs`, `EmitDifferenceResult`.
+- **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection and the metadata-tools (`mdv`) CLI handshake, establishing the harness for future binary delta verification. Next increment will replace the stub with real metadata/IL/PDB delta emission validated via `mdv`.
 
 ### Task 2.2 – Rude Edit Classification
 - **Scope**: Extend `TypedTreeDiff` to label unsupported edits.

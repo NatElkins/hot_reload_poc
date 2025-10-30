@@ -36,4 +36,5 @@ Keep commits focused and descriptive in sentence case (see `git log --oneline` f
   - Compiler sources under `src/Compiler/**`, especially `CodeGen/IlxGen.fs`, `AbstractIL/ilwrite.fs`, `TypedTree/**`
   - Hot reload baseline helpers: `src/Compiler/CodeGen/HotReloadBaseline.fs[si]` (baseline capture) and component coverage in `tests/FSharp.Compiler.ComponentTests/HotReload/BaselineTests.fs`
   - Test harness directories under `tests/`
+- Documentation practice: when introducing new public types or functions add XML documentation comments and prefer explanatory inline comments for non-obvious logic.
 - **General build command**: `./.dotnet/dotnet build FSharp.sln -c Debug` (feature flag off by default).

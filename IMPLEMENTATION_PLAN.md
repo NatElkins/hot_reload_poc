@@ -47,6 +47,15 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status**: Completed (2025-10-30). Snapshot helpers are threaded through `IlxGenResults`, and `HotReloadBaseline.createWithEnvironment` carries the captured environment when the hot reload feature flag is enabled.
 - **Follow-up**: Expose a test harness (reflection or public factory) so we can re-enable `IlxGenEnv` restoration tests before Milestone 2 work begins.
 
+### Task 1.5 – HotReloadNameMap Coverage Audit
+- **Scope**: Audit every `NiceNameGenerator`/`StableNiceNameGenerator` call site and ensure hot reload sessions reuse stable names.
+- **Files/Modules**: `IlxGen.fs`, `EraseClosures.fs`, `AsyncBuilder.fs`, `ComputationExpressions/*`, other modules emitting synthesized names.
+- **Objective**: Eliminate line-number-based suffixes for compiler-generated symbols (closures, async state machines, computation expression artifacts, `PrivateImplementationDetails`) when hot reload is enabled.
+- **Acceptance Criteria**:
+  - Added component tests covering closures, async workflows, computation expressions, and record/union helpers with stable tokens across edits.
+  - Documentation of any remaining generators that trigger rude edits rather than stable renaming.
+- **Context**: Required to keep metadata tokens stable; mirrors Roslyn’s reliance on `DefinitionMap.MetadataLambdasAndClosures`.
+
 ## Milestone 2 – Delta Emission & Rude Edit Diagnostics
 
 ### Task 2.1 – IlxDeltaEmitter Core
@@ -59,6 +68,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - HotReloadTest orchestrates mdv verification in CI.
 - **Context**: Roslyn `DeltaMetadataWriter.cs`, `EmitDifferenceResult`.
 - **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection and the metadata-tools (`mdv`) CLI handshake, establishing the harness for future binary delta verification. Next increment will replace the stub with real metadata/IL/PDB delta emission validated via `mdv`.
+- **Follow-up**: Design and implement AbstractIL delta-writing support (EncLog/EncMap/table slicing) before enabling non-placeholder emission.
 
 ### Task 2.2 – Rude Edit Classification
 - **Scope**: Extend `TypedTreeDiff` to label unsupported edits.
@@ -85,6 +95,15 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - End-to-end script in `tests/projects/HotReloadSamples` builds baseline and emits single delta, verifying reflection result changes.
   - Whole build remains backward compatible.
 - **Context**: `HotReloadTest.fs` prototype, Roslyn `WatchHotReloadService`.
+
+### Task 2.5 – FSharpSymbolMatcher & Synthesized Member Mapping
+- **Scope**: Implement `FSharpSymbolMatcher` to map baseline symbols (including synthesized members) into the current compilation.
+- **Files/Modules**: new `src/Compiler/CodeGen/FSharpSymbolMatcher.fs`, integrations in `IlxDeltaEmitter.fs`, updates to `HotReloadBaseline` for synthesized-member metadata.
+- **Objective**: Reuse metadata handles for unchanged definitions, merge anonymous types/delegates, and identify deleted synthesized members before emitting deltas.
+- **Acceptance Criteria**:
+  - Unit/component tests covering closure/async state-machine edits confirm tokens are reused across generations.
+  - Matcher feeds `IlxDeltaEmitter` with maps analogous to Roslyn’s `SynthesizedTypeMaps` and `SymbolChanges`.
+- **Context**: Mirrors Roslyn’s `SymbolMatcher`/`CSharpSymbolMatcher`; prerequisite for accurate metadata deltas.
 
 ## Milestone 3 – Tooling & API Surface
 

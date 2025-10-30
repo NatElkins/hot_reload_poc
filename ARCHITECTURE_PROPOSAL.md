@@ -149,6 +149,7 @@
 | --- | --- | --- | --- |
 | `EmitBaseline` (src/Compilers/Core/Portable/EditAndContinue/EmitBaseline.cs) | Persists metadata heaps, EncLog/EncMap, and definition handles for delta comparisons. | `FSharpEmitBaseline` (src/Compiler/CodeGen/HotReloadBaseline.fs) | New helper captures `MetadataSnapshot` (heap lengths, table row counts) and stable token maps via `HotReloadBaseline.create`, with `createWithEnvironment` persisting the `IlxGenEnvSnapshot` when a hot reload session is active. Used by `WriteILBinaryInMemoryWithArtifacts` to surface baseline state when hot reload is enabled. |
 | `DefinitionMap.MetadataLambdasAndClosures` (src/Compilers/Core/Portable/Emit/EditAndContinue/DefinitionMap.cs#L12) | Caches lambda/debug closure IDs for mapping updated methods to prior generated names. | `HotReloadNameMap` (src/Compiler/TypedTree/HotReloadNameMap.fs) | HotReloadNameMap should mirror Roslyn by providing stable names for compiler-generated lambdas/closures. Consider future rename (e.g., `LambdaClosureNameMap`) to align terminology. |
+| `SymbolMatcher` (src/Compilers/Core/Portable/Emit/EditAndContinue/SymbolMatcher.cs) | Maps baseline symbols into the new compilation, merges synthesized members, and preserves metadata handles across generations. | `FSharpSymbolMatcher` (new) | Required to remap `IlxGen` outputs to existing tokens, merge synthesized ILX artifacts (closures, async state machines, private implementation details), and reconcile deleted members. Must understand anonymous type/delegate handling akin to Roslyn’s `SynthesizedTypeMaps`. |
 
 - `HotReloadNameMap`
   - `valNames: Map<ValStamp, string>`
@@ -185,6 +186,17 @@
   - Consumes `SequencePointInfo` already produced during baseline emission.
   - Reuses `ILPdbWriter` functions to emit method scopes, but constrained to delta tables (Document + MethodDebugInformation row counts set to zero as in POC).
   - Needs `MethodDefinitionHandle` mapping from `FSharpEmitBaseline`.
+
+#### 4.2.7 Definition remapping (SymbolMatcher)
+
+Roslyn relies on `SymbolMatcher` and language-specific visitors (for C#, `CSharpSymbolMatcher`) to translate symbols captured in an earlier `EmitBaseline` into the current compilation. The matcher merges anonymous types, synthesized closures/state machines, and deleted members so the delta writer can reuse metadata handles and avoid emitting duplicates. F# needs an equivalent component:
+
+- **Inputs**: prior `FSharpEmitBaseline`, the current `TypedTree`/ILX outputs, and synthesized member maps (closures, computation expression scaffolding, async builders, PrivateImplementationDetails).
+- **Responsibilities**:
+  - Map ILX definitions (types/methods/fields/events) back to existing metadata rows when the symbol still exists.
+  - Merge synthesized members across generations (mirroring Roslyn’s `SynthesizedTypeMaps` and anonymous delegate indexers).
+  - Identify deleted synthesized members so `EncLog` entries can be produced.
+- **Implementation sketch**: add `FSharpSymbolMatcher` that walks `Tycon`/`ValRef` structures, consults `HotReloadNameMap` for stable compiler-generated names, and produces lookup tables consumed by `IlxDeltaEmitter`.
 
 ### 4.3 Reusing Existing Compiler Components
 
@@ -480,13 +492,18 @@ These defaults should be revisited with stakeholders as implementation progresse
 
 ## 6. Risk Areas and Mitigations
 
-- **Name Stability**: must audit all `NiceNameGenerator` call sites (closures, active patterns, computation expressions, async transformations) to ensure hot reload mode uses stable names.
-- **Type Providers**: provider outputs may embed timestamps or change identity across sessions; `TypeProviderSnapshot` must cache generated members and treat edits as rude when providers emit divergent IL.
-- **Quotations and Reflected Definitions**: ensure `quotationResourceInfo` in `IlxGenResults` is delta-capable; otherwise require restart on changes impacting quotations.
-- **Fallback / Rude Edit Path**: maintain an explicit restart flow for edits that invalidate metadata layout (e.g., union representation changes, inline flag flips), aligning with the agreed expectation that some changes should be refused and trigger full recompilation.
-- **Cross-Assembly Edits**: F# often inlines across modules; edits to `inline` values or module-level bindings should trigger rude edits to avoid inconsistent IL.
-- **Async/State Machines**: ensure closure/state machine types reuse tokens (`SymbolChanges` analog). If structure changes, escalate to type replacement using `CreateNewOnMetadataUpdateAttribute`.
-- **Debugger Integration**: F# debugger uses C# EE; expression evaluator parity (tracked in `notes/implementation_plan.md`) must align to allow break-mode edits.
+- **Metadata delta emission**: AbstractIL lacks delta-writing APIs (EncLog/EncMap/table slicing). Designing this is high risk and prerequisite for Task 2.1 completion.
+- **Symbol remapping (`FSharpSymbolMatcher`)**: we must map baseline definitions and synthesized members into the new compilation to reuse tokens. Missing this will force full rebuilds for edits touching closures/state machines.
+- **Name stability coverage**: audit every `NiceNameGenerator` call (closures, async builders, computation expressions, private implementation details) to ensure hot-reload mode suppresses line-number suffixes.
+- **Type providers**: provider outputs may be non-deterministic; cache and detect divergences to surface rude edits rather than emitting invalid deltas.
+- **Quotations and reflected definitions**: ensure `quotationResourceInfo` and related IL resources can be re-emitted incrementally; otherwise treat edits as restart-required.
+- **Fallback / rude edit path**: maintain an explicit rebuild workflow for edits that alter metadata layout (union shape changes, inline flags, representation attributes).
+- **Cross-assembly edits**: inline-heavy patterns should surface rude edits when upstream inline definitions change; document expectations in tooling.
+- **Async/state machines & computation expressions**: tokens for synthesized types must be preserved; structural changes may need type replacement via `CreateNewOnMetadataUpdateAttribute`.
+- **Debugger integration**: F# relies on the C# expression evaluator—ensure debugger state machines and locals remain valid across deltas.
+- **Runtime/IDE orchestration**: current CLI flag only captures baselines; delta generation, `MetadataUpdater.ApplyUpdate`, and IDE plumbing remain future work and should be tracked explicitly.
+- **Test breadth**: expand coverage beyond baseline/token tests to include mdv-validated metadata, rude-edit matrices, synthesized constructs, and multi-generation sessions.
+- **Signature/optimization data**: confirm whether `.signature`/`.optimization` resources must be regenerated for deltas; document findings to avoid runtime regressions.
 
 ## 7. Implementation Roadmap
 

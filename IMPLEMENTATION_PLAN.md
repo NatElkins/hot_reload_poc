@@ -61,7 +61,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 ### Task 2.1 – IlxDeltaEmitter Core
 - **Scope**: Build `IlxDeltaEmitter` to produce metadata/IL/PDB deltas.
 - **Files/Modules**: new `src/Compiler/CodeGen/IlxDeltaEmitter.fs`, integrate into hot-reload workflow.
-- **Objective**: Given baseline state and semantic edits, emit delta blobs ready for `MetadataUpdater.ApplyUpdate`.
+- **Objective**: Given baseline state and semantic edits, emit delta blobs ready for `MetadataUpdater.ApplyUpdate`, extending `AbstractIL/ilwrite.fs` with delta-aware helpers (EncLog/EncMap table writers, heap slicing) analogous to Roslyn’s `DeltaMetadataWriter`.
 - **Acceptance Criteria**:
   - Component tests `tests/FSharp.Compiler.ComponentTests/HotReload/DeltaEmitterTests.fs` validate emitted blobs match `mdv` output (`mdv /g:<md>;<il>`).
   - Ensure `EncLog`/`EncMap` tracking implemented.
@@ -74,7 +74,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 ### Task 2.2 – Rude Edit Classification
 - **Scope**: Extend `TypedTreeDiff` to label unsupported edits.
 - **Files/Modules**: `TypedTreeDiff.fs`, new `RudeEditDiagnostics.fs`.
-- **Objective**: Detect inline changes, signature edits, union layout changes, type provider regenerations; surface diagnostics.
+- **Objective**: Detect inline changes, signature edits, union layout changes, type provider regenerations, and edits that would alter `.sigdata`/`.optdata`; surface diagnostics.
 - **Acceptance Criteria**:
   - Unit tests `tests/FSharp.Compiler.UnitTests/HotReload/RudeEditTests.fs` cover each scenario.
   - Diagnostics integrate with existing compiler error reporting (no global behavior change until flag enabled).
@@ -98,12 +98,12 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Context**: `HotReloadTest.fs` prototype, Roslyn `WatchHotReloadService`.
 
 ### Task 2.5 – FSharpSymbolMatcher & Synthesized Member Mapping
-- **Scope**: Implement `FSharpSymbolMatcher` to map baseline symbols (including synthesized members) into the current compilation.
-- **Files/Modules**: new `src/Compiler/CodeGen/FSharpSymbolMatcher.fs`, integrations in `IlxDeltaEmitter.fs`, updates to `HotReloadBaseline` for synthesized-member metadata.
+- **Scope**: Implement `FSharpSymbolMatcher` to map baseline symbols (including synthesized members) into the current compilation and introduce `FSharpSymbolChanges` to aggregate edit classifications for delta emission.
+- **Files/Modules**: new `src/Compiler/CodeGen/FSharpSymbolMatcher.fs`, new `src/Compiler/CodeGen/FSharpSymbolChanges.fs`, integrations in `IlxDeltaEmitter.fs`, updates to `HotReloadBaseline` for synthesized-member metadata.
 - **Objective**: Reuse metadata handles for unchanged definitions, merge anonymous types/delegates, and identify deleted synthesized members before emitting deltas.
 - **Acceptance Criteria**:
   - Unit/component tests covering closure/async state-machine edits confirm tokens are reused across generations.
-  - Matcher feeds `IlxDeltaEmitter` with maps analogous to Roslyn’s `SynthesizedTypeMaps` and `SymbolChanges`.
+  - `FSharpSymbolChanges` surfaces added/updated/deleted/synthesised members mirroring Roslyn’s `SymbolChanges`, and feeds `IlxDeltaEmitter` with the necessary maps.
 - **Context**: Mirrors Roslyn’s `SymbolMatcher`/`CSharpSymbolMatcher`; prerequisite for accurate metadata deltas.
 
 ### Task 2.6 – HotReload Session Orchestrator
@@ -169,3 +169,4 @@ Each task must:
   - Output consumed by `IlxDeltaEmitter` and future `FSharpSymbolMatcher` to build deltas.
 - **Context**: Roslyn’s `DefinitionMap`, `SymbolChanges`, `AddedOrChangedMethodInfo`.
 - **Follow-up**: Design `FSharpSynthesizedTypeMaps` and ensure `FSharpEmitBaseline` persists synthesized member metadata for reuse.
+- **Status**: In progress — initial `FSharpDefinitionMap` module and component tests (covering added/updated/deleted/type edits) are implemented; integration with synthesized-member tracking and rude-edit diagnostics remains outstanding.

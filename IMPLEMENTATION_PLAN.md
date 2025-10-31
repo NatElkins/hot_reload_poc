@@ -118,8 +118,8 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Context**: Mirrors Roslyn’s `SymbolMatcher`/`CSharpSymbolMatcher`; prerequisite for accurate metadata deltas.
 
 ### Task 2.6 – HotReload Session Orchestrator
-- **Scope**: Implement `FSharpHotReloadSession` (CLI/IDE services) coordinating edit detection, semantic analysis, delta emission, apply, and baseline updates.
-- **Files/Modules**: new `HotReloadSession.fs`, integrations in `fsc.fs`, future IDE bridge modules.
+- **Scope**: Implement `FSharpEditAndContinueLanguageService` (CLI/IDE services) coordinating edit detection, semantic analysis, delta emission, apply, and baseline updates.
+- **Files/Modules**: new `HotReload/EditAndContinueLanguageService.fs`, integrations in `fsc.fs`, future IDE bridge modules.
 - **Objective**: Mirror Roslyn’s `EditSession`/`ManagedHotReloadLanguageService`—queue edits, handle cancellation, surface diagnostics, apply deltas, update baselines.
 - **Acceptance Criteria**:
   - CLI experiment using `--enable:hotreloaddeltas` can apply method-body deltas end-to-end (including baseline update) with logging.

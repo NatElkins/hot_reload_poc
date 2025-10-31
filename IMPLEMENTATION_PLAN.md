@@ -117,14 +117,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - `FSharpSymbolChanges` surfaces added/updated/deleted/synthesised members mirroring Roslyn’s `SymbolChanges`, and feeds `IlxDeltaEmitter` with the necessary maps.
 - **Context**: Mirrors Roslyn’s `SymbolMatcher`/`CSharpSymbolMatcher`; prerequisite for accurate metadata deltas.
 
-### Task 2.6 – HotReload Session Orchestrator
-- **Scope**: Implement `FSharpEditAndContinueLanguageService` (CLI/IDE services) coordinating edit detection, semantic analysis, delta emission, apply, and baseline updates.
-- **Files/Modules**: new `HotReload/EditAndContinueLanguageService.fs`, integrations in `fsc.fs`, future IDE bridge modules.
-- **Objective**: Mirror Roslyn’s `EditSession`/`ManagedHotReloadLanguageService`—queue edits, handle cancellation, surface diagnostics, apply deltas, update baselines.
-- **Acceptance Criteria**:
-  - CLI experiment using `--enable:hotreloaddeltas` can apply method-body deltas end-to-end (including baseline update) with logging.
-  - Hook points ready for IDE consumers (VS/dotnet-watch).
-- **Context**: Roslyn `EditSession`, `ManagedHotReloadLanguageService`, `EmitSolutionUpdate` workflow.
+- **Status**: In progress — `FSharpEditAndContinueLanguageService` now exposes Roslyn-aligned lifecycle methods, delta emission helpers, and adapters for CLI/IDE hosts. Component tests cover multi-generation emission via the service. Next steps wire higher-level semantic edit detection into these hooks.
 
 ## Milestone 3 – Tooling & API Surface
 

@@ -159,6 +159,7 @@
 - **Signature/optimization resources**: The F# compiler persists `.sigdata`/`.optdata` blobs either as resources or loose files (`src/Compiler/Driver/CompilerImports.fs:995-1045`). For hot reload we keep the baseline copies immutable and treat any change to these resources as a rude edit, matching Roslyn’s policy of disallowing edits that alter emitted metadata signatures. Delta emission only manipulates IL/metadata/PDB—no `.sigdata`/`.optdata` regeneration mid-session.
 - **Compilation context parity**: Roslyn’s `EmitHelpers.EmitDifference` hydrates metadata symbols, instantiates `CSharpSymbolMatcher`, and drives `PEDeltaAssemblyBuilder`. Our `FSharpHotReloadSession` must replicate this choreography: rehydrate `IlxGenEnvSnapshot`, build `FSharpSymbolMatcher`, seed synthesized-member maps, and call into `IlxDeltaEmitter`/`FSharpPdbDeltaBuilder`. The orchestration will live alongside `HotReloadBaseline` so the CLI/IDE layer mirrors Roslyn’s `EditSession`.
 - **Metadata writer touchpoints**: Delta emission leans on `ILBinaryWriter` (`AbstractIL/ilwrite.fs`) for table enumeration, heap sizing, and token lookup (`ILTokenMappings`). We will extend these helpers with delta-aware APIs (EncLog/EncMap generation, heap slicing) so `IlxDeltaEmitter` can operate without forking AbstractIL, keeping parity with Roslyn’s `DeltaMetadataWriter`.
+- **Delta stream scaffolding**: `IlxDeltaStreamBuilder` (`src/Compiler/CodeGen/IlxDeltaStreams.fs`) now mirrors Roslyn’s metadata builder pipeline for method-body-only edits. It captures encoded method bodies, materialises preliminary EncLog/EncMap entries, and emits non-empty metadata/IL blobs (with placeholder RVAs) so the upcoming `IlxDeltaEmitter` integration can swap out today’s placeholder payloads.
 
 - `HotReloadNameMap`
   - `valNames: Map<ValStamp, string>`
@@ -513,6 +514,7 @@ These defaults should be revisited with stakeholders as implementation progresse
 - **Debugger integration**: F# relies on the C# expression evaluator—ensure debugger state machines and locals remain valid across deltas.
 - **Runtime/IDE orchestration**: current CLI flag only captures baselines; delta generation, `MetadataUpdater.ApplyUpdate`, and IDE plumbing remain future work and should be tracked explicitly.
 - **Test breadth**: expand coverage beyond baseline/token tests to include mdv-validated metadata, rude-edit matrices, synthesized constructs, and multi-generation sessions.
+  - Deferred test scenarios: async state machines, lambda/closure edits, computation expressions, and multi-generation sequences should be validated once the delta writer supports them (tracked in IMPLEMENTATION_PLAN.md).
 - **Signature/optimization data**: confirm whether `.signature`/`.optimization` resources must be regenerated for deltas; document findings to avoid runtime regressions.
 
 ## 7. Implementation Roadmap

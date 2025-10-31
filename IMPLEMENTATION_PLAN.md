@@ -67,9 +67,16 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Ensure `EncLog`/`EncMap` tracking implemented.
   - HotReloadTest orchestrates mdv verification in CI.
 - **Context**: Roslyn `DeltaMetadataWriter.cs`, `EmitDifferenceResult`.
-- **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection, EncLog/EncMap projections, and the metadata-tools (`mdv`) CLI handshake, establishing the harness for future binary delta verification. Next increment will replace the stub with real metadata/IL/PDB delta emission validated via `mdv`.
+- **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection, EncLog/EncMap projections, and the metadata-tools (`mdv`) CLI handshake. The next increments proceed via small, reviewable commits; after each subtask run the affected test suites and capture the results in the commit message. Only commit once the targeted tests pass (investigate any failures before proceeding).
+- **Subtask tracker** (each with its own commit/tests report):
+  - ✅ **Extract method-body helpers** (2025-10-31, commit `d58d2edd9`): factored out `EncodeMethodBody` in `ilwrite.fs`; ran `./.dotnet/dotnet build FSharp.sln -c Debug` and HotReload-filtered component tests.
+  - ⏳ **Expose metadata row builders**: Pull out the minimal table/heap append helpers needed for method definition deltas. Repeat the build + relevant tests.
+  - ✅ **Implement delta emit context** (2025-10-31): introduced `IlDeltaStreamBuilder` (`src/Compiler/CodeGen/IlxDeltaStreams.fs`) and unit coverage in `DeltaEmitterTests.fs`. Validated via `./.dotnet/dotnet build FSharp.sln -c Debug` and `./.dotnet/dotnet test ... --filter FullyQualifiedName~HotReload`.
+  - ⏳ **Integrate with `IlxDeltaEmitter`**: Replace the placeholder blobs with real metadata/IL, update component tests (mdv verification, multi-generation scaffolding).
+  - ⏳ **Broaden test coverage**: Layer in additional scenarios (async state machines, closures, computation expressions, multi-generation) once the delta output is stable.
 - **Follow-up**: Design and implement AbstractIL delta-writing support (EncLog/EncMap/table slicing) before enabling non-placeholder emission.
 - **Follow-up**: Integrate variable slot allocator/local mapping once method body re-emission is implemented.
+- **Deferred test scenarios**: once real deltas land, add component suites covering async state machines, closure/lambda edits, computation expressions, and multi-generation sessions (== sequential deltas).
 
 ### Task 2.2 – Rude Edit Classification
 - **Scope**: Extend `TypedTreeDiff` to label unsupported edits.

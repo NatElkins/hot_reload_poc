@@ -442,12 +442,16 @@ type SimpleLib =
                 // This is critical for hot reload to work properly
                 let originalModuleId = originalAssembly.ManifestModule.ModuleVersionId
                 
-                // Create the delta generator
-                let generator = DeltaGenerator.create()
+                // Create the delta generator (will be reused across multiple edits)
+                let mutable generator = DeltaGenerator.create()
                 
                 // Generate the delta - pass typeName, methodName and isInvokeStub flag
                 printfn "[HotReloadTest] Generating delta to change return value to 43..."
-                let! delta = DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub typeName methodName
+                let! updatedGenerator, delta = 
+                    DeltaGenerator.generateDelta generator originalAssembly 43 isInvokeStub typeName methodName
+                
+                // Persist generator state for potential subsequent edits
+                generator <- updatedGenerator
                 
                 match delta with
                 | None ->

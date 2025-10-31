@@ -67,7 +67,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Ensure `EncLog`/`EncMap` tracking implemented.
   - HotReloadTest orchestrates mdv verification in CI.
 - **Context**: Roslyn `DeltaMetadataWriter.cs`, `EmitDifferenceResult`.
-- **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection and the metadata-tools (`mdv`) CLI handshake, establishing the harness for future binary delta verification. Next increment will replace the stub with real metadata/IL/PDB delta emission validated via `mdv`.
+- **Status**: In progress — API scaffolded (`IlxDelta`, `IlxDeltaRequest`) with placeholder metadata emission. Component tests now cover token projection, EncLog/EncMap projections, and the metadata-tools (`mdv`) CLI handshake, establishing the harness for future binary delta verification. Next increment will replace the stub with real metadata/IL/PDB delta emission validated via `mdv`.
 - **Follow-up**: Design and implement AbstractIL delta-writing support (EncLog/EncMap/table slicing) before enabling non-placeholder emission.
 - **Follow-up**: Integrate variable slot allocator/local mapping once method body re-emission is implemented.
 

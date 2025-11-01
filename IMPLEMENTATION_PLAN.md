@@ -87,9 +87,11 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Files/Modules**: `TypedTreeDiff.fs`, new `RudeEditDiagnostics.fs`.
 - **Objective**: Detect inline changes, signature edits, union layout changes, type provider regenerations, and edits that would alter `.sigdata`/`.optdata`; surface diagnostics.
 - **Acceptance Criteria**:
-  - Unit tests `tests/FSharp.Compiler.UnitTests/HotReload/RudeEditTests.fs` cover each scenario.
+  - Unit tests in `tests/FSharp.Compiler.Service.Tests/HotReload/TypedTreeDiffTests.fs` (and companions) cover each scenario.
   - Diagnostics integrate with existing compiler error reporting (no global behavior change until flag enabled).
 - **Context**: Roslyn `RudeEditDiagnosticTests`.
+- **Status**: Completed (2025-11-01). `TypedTreeDiff` now classifies signature/inline/type-layout/added/removed edits, `RudeEditDiagnostics.fs` maps each rude edit to stable IDs and messages, and service-layer tests (`RudeEditDiagnosticsTests.fs`, `TypedTreeDiffTests.fs`) assert the diagnostics. Validation: `./.dotnet/dotnet build FSharp.sln -c Debug`; `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`.
+- **Follow-up**: Plumb diagnostics into `FSharpEditAndContinueLanguageService` responses and CLI tooling (Task 3.1/Task 3.4). Track additional rude-edit scenarios (type providers, active patterns) for future expansion.
 
 ### Task 2.3 – PDB Delta Support
 - **Scope**: Implement `FSharpPdbDeltaBuilder` using existing ILPdbWriter utilities.

@@ -1,0 +1,10 @@
+namespace WatchLoop
+
+open System
+
+module Target =
+    let mutable counter = 0
+
+    let GetMessage () =
+        counter <- counter + 1
+        sprintf "Message version hashwait (invocation #%d)" counter

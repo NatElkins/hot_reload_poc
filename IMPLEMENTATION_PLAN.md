@@ -214,11 +214,11 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Evaluate whether we should also wire the scripted mode into `dotnet watch` once runtime apply becomes reliable.
 
 ### Task 3.7 – `fsc-watch` Hot Reload Demo (Short Term)
-- **Status**: In progress (2025-11-03). Added a project-based regression in `MdvValidationTests.fs` that drives `StartHotReloadSession`/`EmitHotReloadDelta` using the MSBuild command line captured from `fsc-watch`, normalises `--out`/source paths, and verifies the emitted delta updates the expected user string. The helper now tolerates missing mdv runtimes but still records the metadata literal so we can diff locally. Runtime `MetadataUpdater.ApplyUpdate` inside the CLI harness is still failing, so the scripted smoke test remains disabled.
+- **Status**: In progress (2025-11-03). Added a project-based regression in `MdvValidationTests.fs` that drives `StartHotReloadSession`/`EmitHotReloadDelta` using the MSBuild command line captured from `fsc-watch`, normalises `--out`/source paths, and verifies the emitted delta updates the expected user string. The helper now tolerates missing mdv runtimes but still records the metadata literal so we can diff locally. Runtime `MetadataUpdater.ApplyUpdate` inside the CLI harness is still failing, so the scripted smoke test remains disabled. A separate integration script (`hot_reload_poc/scripts/watchloop_mdv_integration.sh`) now automates the watch-loop + mdv workflow; it currently reproduces the stale literal (`"Message version 3 …"`) emitted by the CLI, so we have a concrete regression harness while we investigate.
 - **Follow-up**:
   1. Use the new component test harness to compare the CLI-generated deltas with Roslyn’s output (focus on the `#US` heap diff) and unblock the runtime apply failure.
   2. Once runtime apply succeeds, re-enable the scripted CLI smoke test and capture the mdv command automatically in the logs.
-  3. Audit `fsc-watch` cleanup logic (bin/obj/delta directories) so each run starts from a clean baseline without leftover files.
+  3. Audit `fsc-watch` cleanup logic (bin/obj/delta directories) so each run starts from a clean baseline without leftover files (the integration script already resets the delta directory; extend that logic to the CLI itself).
 ### Task 4.1 – Workspace Specification & Prototype
 - **Scope**: Define `FSharpWorkspace`, `FSharpProject`, and `FSharpDocument` data models and build an initial prototype.
 - **Files/Modules**: New workspace assemblies (to be decided), incremental builder integration layers.

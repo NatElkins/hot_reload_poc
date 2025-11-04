@@ -24,6 +24,7 @@ let printUsage () =
     printfn "       [--invoke Namespace.Type.Method] [--interval <seconds>] [--dump-deltas <DIR>] [--validate-with-mdv]"
     printfn "       [--mdv-command-only]   (emit deltas, print mdv command, skip runtime apply/invocation)"
     printfn "       [--quit-after-delta]   (stop after first successful delta emission)"
+    printfn "       [--clean-build]        (delete bin/ and obj/ before capturing compiler arguments)"
 
 let parseArgs (argv: string[]) =
     if argv.Length = 0 then None
@@ -39,6 +40,7 @@ let parseArgs (argv: string[]) =
         let mutable useDefaultLoad = false
         let mutable mdvCommandOnly = false
         let mutable quitAfterDelta = false
+        let mutable cleanBuild = false
         let mutable index = 1
 
         let inline readValue () =
@@ -93,9 +95,12 @@ let parseArgs (argv: string[]) =
                 | "--quit-after-delta" ->
                     index <- index + 1
                     quitAfterDelta <- true
+                | "--clean-build" ->
+                    index <- index + 1
+                    cleanBuild <- true
                 | unknown ->
                     failwithf "Unknown option '%s'." unknown
-            Some(projectPath, configuration, framework, applyRuntime, invokeTarget, invokeInterval, deltaOutput, validateWithMdv, useDefaultLoad, mdvCommandOnly, quitAfterDelta)
+            Some(projectPath, configuration, framework, applyRuntime, invokeTarget, invokeInterval, deltaOutput, validateWithMdv, useDefaultLoad, mdvCommandOnly, quitAfterDelta, cleanBuild)
         with ex ->
             printfn "%s" ex.Message
             None
@@ -287,7 +292,7 @@ let main argv =
     | None ->
         printUsage()
         1
-    | Some (projectPath, configuration, framework, applyRuntimeUpdate, invokeTarget, invokeInterval, deltaOutput, validateWithMdv, useDefaultLoad, mdvCommandOnly, quitAfterDelta) ->
+    | Some (projectPath, configuration, framework, applyRuntimeUpdate, invokeTarget, invokeInterval, deltaOutput, validateWithMdv, useDefaultLoad, mdvCommandOnly, quitAfterDelta, cleanBuild) ->
         try
             if not mdvCommandOnly then
                 ensureEnvironment()
@@ -305,7 +310,8 @@ let main argv =
                   ValidateWithMdv = (validateWithMdv || mdvCommandOnly)
                   UseDefaultLoadContext = useDefaultLoad
                   MdvCommandOnly = mdvCommandOnly
-                  QuitAfterDelta = quitAfterDelta || mdvCommandOnly }
+                  QuitAfterDelta = quitAfterDelta || mdvCommandOnly
+                  CleanBuild = cleanBuild }
 
             log (sprintf "Project: %s" projectPath)
             configuration |> Option.iter (fun c -> log (sprintf "Configuration override: %s" c))
@@ -314,6 +320,7 @@ let main argv =
             if not mdvCommandOnly then
                 invokeTarget |> Option.iter (fun (t, m) -> log (sprintf "Invocation target: %s.%s" t m))
                 log (sprintf "Invocation interval: %.2fs" invokeInterval.TotalSeconds)
+            if cleanBuild then log "Clean build mode enabled."
             deltaOutput |> Option.iter (fun path -> log (sprintf "Delta output directory requested: %s" path))
             if validateWithMdv then log "mdv validation enabled."
             if mdvCommandOnly then log "mdv command-only mode enabled; metadata commands will be printed after each edit."

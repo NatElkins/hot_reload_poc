@@ -20,6 +20,38 @@ let private log message =
     let timestamp = DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture)
     printfn "[fsc-watch %s] %s" timestamp message
 
+let private tryDeleteDirectory path description =
+    if Directory.Exists(path) then
+        try
+            Directory.Delete(path, true)
+            log (sprintf "Removed %s directory: %s" description path)
+        with ex ->
+            log (sprintf "Failed to delete %s directory %s: %s" description path ex.Message)
+
+let private cleanProjectOutputs (projectDirectory: string) =
+    let binDir = Path.Combine(projectDirectory, "bin")
+    let objDir = Path.Combine(projectDirectory, "obj")
+    tryDeleteDirectory binDir "bin"
+    tryDeleteDirectory objDir "obj"
+
+let private persistMdvCommand (logOutput: bool) (generation: int) (baselinePath: string) (metadataPath: string) (ilPath: string) =
+    let command = sprintf "mdv \"%s\" \"/g:%s;%s\"" baselinePath metadataPath ilPath
+    if logOutput then
+        log (sprintf "  %s" command)
+        log "  (append /il+ or /md- switches as desired)"
+    try
+        let directory = Path.GetDirectoryName(metadataPath)
+        if not (String.IsNullOrWhiteSpace(directory)) then
+            Directory.CreateDirectory(directory) |> ignore
+            let commandPath = Path.Combine(directory, sprintf "mdv-gen%d.cmd" generation)
+            File.WriteAllText(commandPath, command + Environment.NewLine)
+            if logOutput then
+                log (sprintf "  mdv command recorded at %s" commandPath)
+            else
+                log (sprintf "mdv command recorded at %s" commandPath)
+    with ex ->
+        log (sprintf "  failed to persist mdv command: %s" ex.Message)
+
 let private logTruncated (prefix: string) (values: string[]) =
     let limit = 32
     let count = values.Length
@@ -46,7 +78,8 @@ type WatchSettings =
       ValidateWithMdv: bool
       UseDefaultLoadContext: bool
       MdvCommandOnly: bool
-      QuitAfterDelta: bool }
+      QuitAfterDelta: bool
+      CleanBuild: bool }
 
 type WatchSession
     ( checker: FSharpChecker,
@@ -375,6 +408,10 @@ let initialize (settings: WatchSettings) =
             | null | "" -> Directory.GetCurrentDirectory()
             | value -> value
 
+        if settings.CleanBuild then
+            log "Clean build requested; deleting bin/ and obj/ directories before capturing command line arguments."
+            cleanProjectOutputs projectDirectory
+
         let commandLine = getFscCommandLine projectFullPath settings.Configuration settings.TargetFramework |> ensureHotReloadOption
         log (sprintf "Captured %d compiler argument(s)." commandLine.Length)
         logTruncated "arg" commandLine
@@ -606,8 +643,12 @@ let applyDelta (session: WatchSession) (changedFiles: string list) (applyRuntime
                         match Path.GetDirectoryName(session.BaselineSnapshotPath) with
                         | null | "" -> Directory.GetCurrentDirectory()
                         | value -> value
-                let deltaArtifactsOpt =
-                    Some (writeDeltaArtifacts deltaRoot nextGeneration delta)
+                let deltaArtifactsOpt = Some (writeDeltaArtifacts deltaRoot nextGeneration delta)
+
+                let metadataPairOpt =
+                    match deltaArtifactsOpt with
+                    | Some (metadataPath, ilPath, _) -> Some (metadataPath, ilPath)
+                    | None -> None
 
                 if runtimePatched then
                     session.RebindInvocationTarget()
@@ -624,19 +665,18 @@ let applyDelta (session: WatchSession) (changedFiles: string list) (applyRuntime
                         log "mdv validation requested but no delta output directory configured; skipping."
 
                 if mdvCommandOnly then
-                    let metadataPath, ilPath =
-                        match deltaArtifactsOpt with
-                        | Some (m, i, _) -> m, i
-                        | None ->
-                            let m, i, _ = writeDeltaArtifacts deltaRoot nextGeneration delta
-                            m, i
-                    log "Delta ready for manual inspection."
-                    log (sprintf "  mdv \"%s\" \"/g:%s;%s\"" session.BaselineSnapshotPath metadataPath ilPath)
-                    log "  (append /il+ or /md- switches as desired)"
+                    match metadataPairOpt with
+                    | Some (metadataPath, ilPath) ->
+                        log "Delta ready for manual inspection."
+                        persistMdvCommand true session.Generation session.BaselineSnapshotPath metadataPath ilPath
+                    | None -> log "Delta ready for manual inspection, but no metadata/IL artifacts were persisted."
                 else
                     match session.InvokeTarget() with
                     | Some value -> log (sprintf "Invocation result after delta: %O" value)
                     | None -> ()
+
+                    metadataPairOpt
+                    |> Option.iter (fun (metadataPath, ilPath) -> persistMdvCommand false session.Generation session.BaselineSnapshotPath metadataPath ilPath)
                 return ApplyDeltaOutcome.Applied delta
         | Error diagnostics ->
             log "Compilation produced diagnostics; aborting delta."

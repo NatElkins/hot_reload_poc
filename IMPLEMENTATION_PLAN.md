@@ -214,11 +214,10 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Evaluate whether we should also wire the scripted mode into `dotnet watch` once runtime apply becomes reliable.
 
 ### Task 3.7 – `fsc-watch` Hot Reload Demo (Short Term)
-- **Status**: In progress (2025-11-03). Added a project-based regression in `MdvValidationTests.fs` that drives `StartHotReloadSession`/`EmitHotReloadDelta` using the MSBuild command line captured from `fsc-watch`, normalises `--out`/source paths, and verifies the emitted delta updates the expected user string. The helper now tolerates missing mdv runtimes but still records the metadata literal so we can diff locally. Runtime `MetadataUpdater.ApplyUpdate` inside the CLI harness is still failing, so the scripted smoke test remains disabled. A separate integration script (`hot_reload_poc/scripts/watchloop_mdv_integration.sh`) now automates the watch-loop + mdv workflow; it currently reproduces the stale literal (`"Message version 3 …"`) emitted by the CLI, so we have a concrete regression harness while we investigate.
+- **Status**: In progress (2025-11-04). The CLI now applies deltas at runtime: with the updated `tryGetOutputPath` logic and runtime copy cleanup, `fsc-watch` emits a delta, calls `MetadataUpdater.ApplyUpdate`, and rebinds the invocation target with the updated literal. The scripted harness (`hot_reload_poc/scripts/watchloop_mdv_integration.sh`) and manual loop both succeed end-to-end.
 - **Follow-up**:
-  1. Use the new component test harness to compare the CLI-generated deltas with Roslyn’s output (focus on the `#US` heap diff) and unblock the runtime apply failure.
-  2. Once runtime apply succeeds, re-enable the scripted CLI smoke test and capture the mdv command automatically in the logs.
-  3. Audit `fsc-watch` cleanup logic (bin/obj/delta directories) so each run starts from a clean baseline without leftover files (the integration script already resets the delta directory; extend that logic to the CLI itself).
+  1. Tighten `fsc-watch` telemetry (bin/obj/delta pruning, mdv command capture) so repeated runs remain deterministic.
+  2. Port more Roslyn ENC scenarios (closures, async state machines) into the new multi-generation harness once symbol remapping lands.
 ### Task 4.1 – Workspace Specification & Prototype
 - **Scope**: Define `FSharpWorkspace`, `FSharpProject`, and `FSharpDocument` data models and build an initial prototype.
 - **Files/Modules**: New workspace assemblies (to be decided), incremental builder integration layers.
@@ -254,11 +253,10 @@ Each task must:
 - **Status**: Completed (2025-10-30) — `TypedTreeDiff` annotates `SymbolId`/`SemanticEdit` with synthesis info, `FSharpDefinitionMap` surfaces synthesized helpers, and `FSharpSymbolChanges` aggregates the data with component coverage in `SymbolChangesTests.fs`.
 
 ### Task 2.x – mdv delta validation regression
-- **Status (2025-11-03)**: In `fsc-watch` mdv command-only mode the emitted `delta_gen1.meta` still references user-string heap entry `'Message version 3 (invocation #%d)'` even after editing the sample to `'Message version <timestamp>'`. Tokens for method bodies and IL remapping succeed, but the delta user-string heap is reusing the baseline literal. Instrumentation (`FSHARP_HOTRELOAD_TRACE_STRINGS=1`) is now wired into `IlxDeltaEmitter.rewriteMethodBody`, and `IlxDelta.UserStringUpdates` exposes the captured mapping. Component test `DeltaEmitterTests.emitDelta records updated user strings` guards the expected behaviour.
+- **Status (2025-11-04)**: Baseline snapshots now come from the PE reader (matching Roslyn’s `EmitBaseline`), both the single-edit and multi-generation mdv regressions pass, and the runtime CLI consumes the same metadata/IL blobs without stale literals.
 - **Next steps**:
-  1. Use the new trace output against the watch-loop repro to confirm whether the rewritten IL is still pointing at the baseline string token or whether the metadata builder is deduplicating incorrectly.
-  2. If the IL carries the fresh literal, audit the mdv invocation (baseline path vs. updated assembly) to ensure we are loading the correct baseline snapshot before reading the delta; otherwise, adjust the IL rewrite to substitute the new token.
-  3. Once the runtime path is validated, update `MdvValidationTests`/integration harnesses to assert the literal end-to-end so regressions are caught without manual mdv runs.
+  1. Extend coverage beyond method-body edits (closures, async/state machines) once symbol remapping handles synthesized members.
+  2. Continue diffing Roslyn ENC outputs on larger samples to vet blob/table shape before widening runtime scenarios.
 - **Owner**: Hot reload squad
 - **Dependencies**: `IlxDeltaEmitter.fs`, `IlxDeltaStreams.fs`, `HotReloadSession.fs`, mdv harness under `tools/fsc-watch`.
 - **Risks**: Incorrect user-string remapping will surface as stale literals at runtime even when method bodies update, undermining watch demos and mdv verification.

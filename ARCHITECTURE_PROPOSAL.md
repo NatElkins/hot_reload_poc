@@ -561,9 +561,11 @@ These defaults should be revisited with stakeholders as implementation progresse
    - Supply sample `MetadataUpdateHandler` modules for web/UI frameworks.
    - Track long-term workspace alignment using the historical design sketch in [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976). That issue outlines an F# workspace/project system with Roslyn-style immutable solution snapshots; although the discussion predates the current hot reload push, it still captures the desired end state for production-grade IDE integration where `dotnet watch`, Visual Studio, and third parties share a common incremental analysis backbone.
    - Provide an interim CLI (`fsc-watch`) that wraps the existing demo helpers to prove the hot reload loop end-to-end before `dotnet watch` adoption. This short-term tool watches a specified `.fsproj`, emits deltas via `FSharpChecker`, applies them with `MetadataUpdater.ApplyUpdate`, and now exposes optional delta artifact dumps plus `mdv` validation hooks so we can inspect ENC metadata/IL generations while the workspace infrastructure incubates.
+   - Normalize relative compiler outputs: `FSharpChecker` now resolves `--out:` arguments against the project directory (mirroring Roslyn’s `EmitBaseline`), so CLI integrations like `fsc-watch` no longer feed mdv stale assemblies when the working directory differs from the project root.
 5. **Validation Harness**
    - Automate hot reload regression runs using the existing POC (`hot_reload_poc/src/TestApp`) augmented with new emitters.
    - Integrate mdv/ilspy comparisons to verify ENC tables and token stability.
+   - Follow Roslyn’s precedent (`MetadataAggregator`) when inspecting delta metadata; our tests currently avoid brute-force table dumps unless requested, but the long-term plan is to layer an aggregator so mdv/metadata inspections operate over baseline+delta views just as Roslyn’s ENC harness does.
 6. **Preview & Feedback**
    - Publish experimental flag in F# compiler/SDK.
    - Gather telemetry on rude edits, delta sizes, error cases.

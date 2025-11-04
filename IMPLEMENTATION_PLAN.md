@@ -214,10 +214,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Evaluate whether we should also wire the scripted mode into `dotnet watch` once runtime apply becomes reliable.
 
 ### Task 3.7 – `fsc-watch` Hot Reload Demo (Short Term)
-- **Status**: In progress (2025-11-04). The CLI now applies deltas at runtime: with the updated `tryGetOutputPath` logic and runtime copy cleanup, `fsc-watch` emits a delta, calls `MetadataUpdater.ApplyUpdate`, and rebinds the invocation target with the updated literal. The scripted harness (`hot_reload_poc/scripts/watchloop_mdv_integration.sh`) and manual loop both succeed end-to-end.
+- **Status**: Completed (2025-11-04). The CLI now applies deltas at runtime; the manual loop and the scripted harness both rebind the invocation target with the updated literal, the new `--clean-build` option keeps runs deterministic, and mdv command lines are captured alongside the emitted artifacts. Component coverage includes single-, multi-generation, and closure edits.
 - **Follow-up**:
-  1. Tighten `fsc-watch` telemetry (bin/obj/delta pruning, mdv command capture) so repeated runs remain deterministic.
-  2. Port more Roslyn ENC scenarios (closures, async state machines) into the new multi-generation harness once symbol remapping lands.
+  - None (roll remaining coverage expansion into Task 2.x and the symbol-mapping workstream).
 ### Task 4.1 – Workspace Specification & Prototype
 - **Scope**: Define `FSharpWorkspace`, `FSharpProject`, and `FSharpDocument` data models and build an initial prototype.
 - **Files/Modules**: New workspace assemblies (to be decided), incremental builder integration layers.

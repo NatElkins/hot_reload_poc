@@ -238,7 +238,7 @@ Roslyn relies on `SymbolMatcher` and language-specific visitors (for C#, `CSharp
 | `IlxGenResults` | Provide IL type definitions for changed modules. | Annotate each `ILMethodDef`/`ILTypeDef` with `SymbolId` metadata, possibly via custom `ILMethodDef.CustomAttrs`. |
 | `ILBinaryWriter` | Leverage `MethodDefTokenMap`, `FindMethodDefIdx`, token assignment functions for delta emission. | Introduce delta mode: skip global table resets, emit only changed rows, populate `EncLog`/`EncMap` (new APIs). |
 | `ILPdbWriter` | Reuse emission of scopes, sequence points, async info. | Add delta mode that writes into a `BlobBuilder` seeded with baseline row counts; ensure Document/MethodDebugInformation tables respect EnC constraints. |
-| `NiceNameGenerator` | Provide baseline names. | Add hot reload override to remove line numbers and use `HotReloadNameMap`. |
+| `NiceNameGenerator` | Provide baseline names. | Transition to a stateless `FSharp.Compiler.GeneratedNames` helper (mirrors Roslyn). `NiceNameGenerator` becomes a thin shim that delegates to the new module and the hot-reload synthesized map. |
 | `TypeReprEnv` | Maintains type representations; required for semantic diff. | Persist across edits to ensure consistent type resolution when building deltas. |
 
 ### 4.4 Name Mangling and Token Integrity
@@ -543,6 +543,7 @@ These defaults should be revisited with stakeholders as implementation progresse
 - **Test breadth**: expand coverage beyond baseline/token tests to include mdv-validated metadata, rude-edit matrices, synthesized constructs, and multi-generation sessions.
   - Deferred test scenarios: async state machines, lambda/closure edits, computation expressions, and multi-generation sequences should be validated once the delta writer supports them (tracked in IMPLEMENTATION_PLAN.md).
 - **Signature/optimization data**: confirm whether `.signature`/`.optimization` resources must be regenerated for deltas; document findings to avoid runtime regressions.
+- **Synthesized name stability**: Roslyn centralises helper naming in `Microsoft.CodeAnalysis.CSharp.Symbols.GeneratedNames`, where each compiler pass supplies explicit ordinals to pure helpers. F# still relies on the mutable `NiceNameGenerator`, so closure/helper names inherit line numbers. As of 2025-11-04 we persist baseline synthesized-name snapshots in `FSharpEmitBaseline` and reload them into `FSharpSynthesizedTypeMaps` whenever a session starts, ensuring method-body edits reuse the baseline name ordering. We still plan to replace `NiceNameGenerator` with a Roslyn-style `GeneratedNames` module backed by these maps so edits that introduce new helpers (closures, async/state machines) remain stable without relying on line numbers.
 
 ## 7. Implementation Roadmap
 
@@ -562,6 +563,7 @@ These defaults should be revisited with stakeholders as implementation progresse
    - Track long-term workspace alignment using the historical design sketch in [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976). That issue outlines an F# workspace/project system with Roslyn-style immutable solution snapshots; although the discussion predates the current hot reload push, it still captures the desired end state for production-grade IDE integration where `dotnet watch`, Visual Studio, and third parties share a common incremental analysis backbone.
    - Provide an interim CLI (`fsc-watch`) that wraps the existing demo helpers to prove the hot reload loop end-to-end before `dotnet watch` adoption. This short-term tool watches a specified `.fsproj`, emits deltas via `FSharpChecker`, applies them with `MetadataUpdater.ApplyUpdate`, and now exposes optional delta artifact dumps plus `mdv` validation hooks so we can inspect ENC metadata/IL generations while the workspace infrastructure incubates.
    - Normalize relative compiler outputs: `FSharpChecker` now resolves `--out:` arguments against the project directory (mirroring Roslyn’s `EmitBaseline`), so CLI integrations like `fsc-watch` no longer feed mdv stale assemblies when the working directory differs from the project root.
+   - Track follow-up infrastructure work: (a) finish wiring `FSharpSynthesizedTypeMaps`/`GeneratedNames` so synthesized helpers reuse baseline names; (b) move delta metadata emission off `MetadataBuilder` and reuse the compiler’s existing IL writer helpers for Roslyn parity; (c) design the workspace projection (`FSharpWorkspace`/`FSharpProject`) per the Modernizing F# Analysis roadmap.
 5. **Validation Harness**
    - Automate hot reload regression runs using the existing POC (`hot_reload_poc/src/TestApp`) augmented with new emitters.
    - Integrate mdv/ilspy comparisons to verify ENC tables and token stability.

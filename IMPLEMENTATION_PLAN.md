@@ -1,6 +1,6 @@
 # F# Hot Reload Implementation Plan
 
-This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. Each task is scoped so that a single LLM-focused iteration can complete it while keeping the repository in a buildable, backwards-compatible state. After every task, run the full build (`dotnet build FSharp.sln` or `build.cmd`) and applicable test suites.
+This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. Each task is scoped so that a single LLM-focused iteration can complete it while keeping the repository in a buildable, backwards-compatible state. After every task, run the full build (`dotnet build FSharp.sln` or `build.cmd`) and applicable test suites. Complete outstanding work in earlier milestones before tackling later items—e.g., finish the Task 2.x synthesized-name/metadata plumbing prior to expanding tooling scenarios in Milestone 3.
 
 - Testing guidance: the full component suite is time-consuming (10+ minutes). For day-to-day iteration run `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload` and reserve the full suite for validation runs.
 
@@ -236,6 +236,7 @@ Each task must:
 - Include unit/component tests as specified.
 - Run the full build after completion.
 - Reference the relevant code locations and resources for context.
+- Document the new tests in this plan so future steps keep adding regression coverage rather than relying on ad-hoc mdv runs.
 
 - After completing each task update this plan with the task status and capture any lessons for ARCHITECTURE_PROPOSAL.md/IMPLEMENTATION_PLAN.md.
 - **Follow-up**: Coordinate with SymbolMatcher work to ensure newly stabilized names are consumed when remapping definitions.
@@ -253,9 +254,24 @@ Each task must:
 
 ### Task 2.x – mdv delta validation regression
 - **Status (2025-11-04)**: Baseline snapshots now come from the PE reader (matching Roslyn’s `EmitBaseline`), both the single-edit and multi-generation mdv regressions pass, and the runtime CLI consumes the same metadata/IL blobs without stale literals.
-- **Next steps**:
-  1. Extend coverage beyond method-body edits (closures, async/state machines) once symbol remapping handles synthesized members.
-  2. Continue diffing Roslyn ENC outputs on larger samples to vet blob/table shape before widening runtime scenarios.
+- **Next steps (execute in order)**:
+1. **Stabilise synthesized helpers**
+    - ✅ Persist baseline synthesized-name snapshots in `FSharpEmitBaseline` and reload them into `FSharpSynthesizedTypeMaps` when sessions start; `FSharpChecker` now resets the map before each delta emission.
+    - ✅ Wired `FSharpSynthesizedTypeMaps` through `NiceNameGenerator`, the symbol matcher, and `IlxDeltaEmitter` so closures/async helpers reuse baseline names; alias-aware token remapping now keeps the async state-machine helpers stable and the mdv regression verifies the split literals (`"Integration async "`/`"updated"`) instead of the stale baseline string.
+    - ✅ Added regression coverage (`mdv validates method-body edit with closure`, `mdv validates method-body edit with async state machine`) that checks the updated IL reuses the baseline synthesized names; continue adding tests alongside every hot-reload change so we never regress this behaviour.
+ 2. **Replace `NiceNameGenerator` with `GeneratedNames`**
+     - ✅ Introduced `FSharp.Compiler.GeneratedNames`, mirroring Roslyn’s helper set, and rewired `NiceNameGenerator`/`FSharpSynthesizedTypeMaps` to delegate to it when generating hot-reload-safe names.
+     - Update lowering/codegen passes to supply explicit ordinals and hook the synthesized-type map so hot reload continues to capture aliases while we migrate callers.
+  3. **Move metadata deltas off `MetadataBuilder`**
+     - Extract the minimal table-writing primitives from `ilwrite.fs` and use them to build delta metadata in pure F#.
+     - Flesh out `FSharpMetadataAggregator` once the new writer is in place so tests can inspect multi-generation metadata.
+  4. **Broaden validation**
+     - Once the above steps land, extend coverage beyond simple method-body edits (closures, async/state machines) and keep diffing Roslyn ENC output on larger samples to vet blob/table shape.
 - **Owner**: Hot reload squad
 - **Dependencies**: `IlxDeltaEmitter.fs`, `IlxDeltaStreams.fs`, `HotReloadSession.fs`, mdv harness under `tools/fsc-watch`.
 - **Risks**: Incorrect user-string remapping will surface as stale literals at runtime even when method bodies update, undermining watch demos and mdv verification.
+- **Implementation Sketch**:
+  - Extend `IlxDeltaRequest` with an optional `SynthesizedNames` map and thread it from both the checker and CLI entry points (`service.fs`, `fsc.fs`).
+  - Teach `FSharpSymbolMatcher` to import the map (mirroring Roslyn’s `SynthesizedTypeMaps`) so nested helper types resolve to baseline definitions.
+  - Update `IlxDeltaEmitter` to consult the map before classifying helpers as new entities, keeping closure/async state machines aligned with baseline metadata.
+  - Tests: keep the existing closure regression, add an async state-machine mdv regression, and add a checker-level unit test that ensures the map flows through public APIs.

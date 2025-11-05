@@ -100,15 +100,34 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status**: Completed (2025-11-01). `TypedTreeDiff` now classifies signature/inline/type-layout/added/removed edits, `RudeEditDiagnostics.fs` maps each rude edit to stable IDs and messages, and service-layer tests (`RudeEditDiagnosticsTests.fs`, `TypedTreeDiffTests.fs`) assert the diagnostics. Validation: `./.dotnet/dotnet build FSharp.sln -c Debug`; `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`.
 - **Follow-up**: Plumb diagnostics into `FSharpEditAndContinueLanguageService` responses and CLI tooling (Task 3.1/Task 3.4). Track additional rude-edit scenarios (type providers, active patterns) for future expansion.
 
-### Task 2.3 – PDB Delta Support
-- **Scope**: Implement `FSharpPdbDeltaBuilder` using existing ILPdbWriter utilities.
-- **Files/Modules**: new `src/Compiler/CodeGen/HotReloadPdb.fs`, modifications to `ILPdbWriter` if needed.
-- **Objective**: Emit portable PDB deltas consistent with sequence points/local scopes.
+### Task 2.3 – Metadata & PDB Delta Writers
+- **Scope**: Mirror Roslyn’s `DeltaMetadataWriter`/`EmitBaseline` pipeline so the F# compiler records table/heap deltas, EncLog/EncMap entries, and portable PDB slices without re-emitting full assemblies.
+- **Files/Modules**:
+  - `src/Compiler/CodeGen/IlxDeltaEmitter.fs`: route metadata/PDB generation through the new writer and persist per-generation artifacts.
+  - **New** `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs` (or similar) encapsulating delta table/heap serialization.
+  - `src/Compiler/CodeGen/HotReloadBaseline.fs`: extend `FSharpEmitBaseline` with cumulative table row counts, heap growth, synthesized/deleted member maps, and method-body metadata (Roslyn’s `AddedOrChangedMethodInfo` equivalent).
+  - `src/Compiler/AbstractIL/ilwrite.fs`: expose delta-aware helpers (e.g., enumerate table entries, copy heap suffixes, provide stable token lookups) analogous to Roslyn’s `DefinitionIndex<T>` utilities.
+  - `src/Compiler/CodeGen/HotReloadPdb.fs`: continue emitting portable PDB deltas, but consume the new baseline metadata to align method debug handles.
+- **Objective**:
+  1. Build per-table “definition indexes” for the updated module so we can append only the rows that changed.
+  2. Serialize table and heap suffixes using baseline offsets from `MetadataSnapshot`, keeping EncLog/EncMap generation in one place.
+  3. Return an updated `FSharpEmitBaseline` mirroring Roslyn’s `EmitBaseline.With(...)`: update table/heap cumulative counts, synthesized/deleted member state, Enc IDs, and per-method delta info.
+  4. Ensure PDB deltas remain aligned with the metadata handles produced by the new writer.
 - **Acceptance Criteria**:
-  - Component tests `tests/FSharp.Compiler.ComponentTests/HotReload/PdbTests.fs` assert sequence points align with source.
-- **Context**: Roslyn PDB emission logic; `ilwritepdb.fs`.
-- **Status**: Completed (2025-11-01). Added `HotReloadPdb.fs` with snapshot capture and delta emission helpers, stored baseline PDB metadata via `FSharpEmitBaseline.PortablePdb`, and threaded snapshot capture through `fsc.fs`. `IlxDeltaEmitter` now produces portable PDB deltas alongside metadata/IL streams, and `PdbTests.fs` validates that method debug information is emitted for updated tokens. Validation: `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`.
-- **Follow-up**: Enrich the delta builder with local scope/async metadata once method body replay work lands (Tasks 2.1/2.5) and consider wiring actual source documents when F# code generation surfaces them.
+  - Unit coverage for the writer (e.g., `FSharpDeltaMetadataWriterTests.fs`) verifies table/heap deltas and EncLog/EncMap entries match expectations for simple edits.
+  - Component tests (`HotReload/DeltaEmitterTests.fs`, `HotReload/PdbTests.fs`) validate that mdv and portable PDB deltas remain correct across multiple generations using the new writer.
+  - `FSharpEmitBaseline` persists cumulative table sizes/heap lengths and synthesized/deleted member sets, and the next delta can be emitted solely from baseline data plus the new edits.
+- **Context**: Roslyn `DeltaMetadataWriter`, `EmitBaseline.With(...)`, `SymbolChanges`, and `SynthesizedTypeMaps`.
+- **Status**: In progress (research completed 2025-11-05; implementation pending).
+- **Next steps (execute in order)**:
+  1. **Baseline extensions** – augment `FSharpEmitBaseline` with fields mirroring Roslyn’s `EmitBaseline` (table entries added, heap lengths added, synthesized/deleted members, added/changed method info) and add helper constructors for updating these snapshots.
+  2. **Definition indexes** – implement lightweight `FSharpDefinitionIndex<'T>` structures wrapping `ILTokenMappings`/`MetadataReader` to enumerate and row-id added types/members for each metadata table.
+  3. **Metadata writer** – create `FSharpDeltaMetadataWriter` that consumes the definition indexes, writes appended rows into a `MetadataBuilder` seeded with baseline heap offsets, generates EncLog/EncMap, and hands back the delta blobs plus updated bookkeeping.
+  4. **Emitter integration** – refactor `IlxDeltaEmitter.emitDelta` to use the new metadata writer instead of relying on `IlxDeltaStreamBuilder.MetadataBuilder` directly; ensure user-string remapping, token remapping, and method body rewriting continue to function.
+  5. **Baseline refresh** – update the working baseline with the writer’s results (`FSharpEmitBaseline.WithDelta`), mirroring Roslyn’s `EmitBaseline.With`, so subsequent generations accumulate table/heap counts correctly.
+  6. **PDB alignment** – adjust `HotReloadPdb` to consume the new baseline metadata (e.g., method token maps, Enc log) when emitting debug deltas.
+  7. **Tests & mdv validation** – expand component tests to assert mdv output and multi-generation scenarios still pass (including closure/async cases). Add targeted unit tests for the definition index and metadata writer utilities.
+- **Follow-up**: Once the metadata writer lands, audit `IlxDeltaEmitter` callers (CLI, checker API) to consume the richer baseline state and remove legacy `MetadataBuilder` fallbacks.
 
 ### Task 2.4 – Runtime Integration Hooks
 - **Scope**: Add compiler entry points to trigger delta generation and integrate feature flags.

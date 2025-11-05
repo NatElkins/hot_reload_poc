@@ -261,7 +261,7 @@ Each task must:
     - ✅ Added regression coverage (`mdv validates method-body edit with closure`, `mdv validates method-body edit with async state machine`) that checks the updated IL reuses the baseline synthesized names; continue adding tests alongside every hot-reload change so we never regress this behaviour.
  2. **Replace `NiceNameGenerator` with `GeneratedNames`**
      - ✅ Introduced `FSharp.Compiler.GeneratedNames`, mirroring Roslyn’s helper set, and rewired `NiceNameGenerator`/`FSharpSynthesizedTypeMaps` to delegate to it when generating hot-reload-safe names.
-     - Update lowering/codegen passes to supply explicit ordinals and hook the synthesized-type map so hot reload continues to capture aliases while we migrate callers.
+     - ✅ Updated the compiler-global name generator to allocate ordinals explicitly (rather than relying on source ranges), so every lowering/codegen call site inherits the stateless scheme while we continue migrating individual helpers.
   3. **Move metadata deltas off `MetadataBuilder`**
      - Extract the minimal table-writing primitives from `ilwrite.fs` and use them to build delta metadata in pure F#.
      - Flesh out `FSharpMetadataAggregator` once the new writer is in place so tests can inspect multi-generation metadata.

@@ -20,6 +20,7 @@ There is no dedicated test project yet, so treat the console output from `HotRel
 
 ## Commit & Pull Request Guidelines
 Keep commits focused and descriptive in sentence case (see `git log --oneline` for examples). Reference related issues in the subject or body, and include before/after output snippets for hot reload flows when relevant. Pull requests should describe the scenario exercised, note any required environment variables (such as `DOTNET_MODIFIABLE_ASSEMBLIES`), and attach console excerpts or IL diffs that prove the change works. Request reviewers from agents who touched the same module lately to maintain shared context.
+- Whenever a test suite passes (even locally), capture that state in a commit so future iterations can bisect or revert cleanly—don’t keep green builds uncommitted.
 
 ## Documentation Updates
 - After completing any task or plan step, record the outcome in both `ARCHITECTURE_PROPOSAL.md` and `IMPLEMENTATION_PLAN.md`, including new learnings, status changes, and follow-up actions so downstream agents stay aligned.

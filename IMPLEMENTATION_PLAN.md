@@ -188,6 +188,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
     - *Update 2025-11-08 (late pm)*: Added `mdv helper validates multi-generation event accessor metadata`,
       ensuring the Ilx metadata pipeline logs the correct Enc operations for event add-handlers across
       sequential deltas.
+    - *Update 2025-11-08 (late pm)*: Added `mdv helper validates multi-generation closure metadata`, giving
+      the IL helper suite parity with the FSharpChecker closure tests so method/closure/async/event
+      scenarios all have multi-generation coverage without relying on the checker pipeline.
     - *Update 2025-11-08 (late pm)*: Added `mdv validates consecutive closure edits`, which drives
       `FSharpChecker` through two closure updates, captures both metadata blobs, and asserts `mdv`
       outputs the updated literals for generations 1 and 2. This raises confidence in closure-heavy

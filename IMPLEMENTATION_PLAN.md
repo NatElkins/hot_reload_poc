@@ -173,6 +173,10 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
       `IlxDelta.EncLog` payload for the matching `AddProperty`/`AddEvent` operations. This ensures the
       full IlxDeltaEmitter → metadata writer pipeline produces Roslyn-parity rows, not just the unit-level
       writer tests.
+    - *Update 2025-11-08 (late pm)*: Added `mdv helper validates multi-generation method metadata`, which
+      replays two sequential method-body edits via `IlxDeltaEmitter`, verifies both deltas retain the same
+      MethodDef token, and asserts their EncLog slices only contain the expected Module/Method entries.
+      This covers the multi-generation scenario without depending on mdv CLI output.
      - broaden `MdvValidationTests.fs` to cover multi-generation changes (closure, async, add/remove) and assert mdv output and EncLog/EncMap contents match the target Roslyn dump.
      - update `HotReload/PdbTests.fs` (and the CLI smoke tests) to ensure PDB deltas reuse method handles across generations.
      - rerun `fsc-watch` with and without runtime apply to verify `MetadataUpdater.ApplyUpdate` succeeds once the writer parity work is complete.

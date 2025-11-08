@@ -180,6 +180,8 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
     - *Update 2025-11-08 (late pm)*: `PdbTests` now include a helper-based multi-generation scenario that
       emits two method-body deltas and asserts each portable PDB delta still references the baseline
       MethodDef token, proving sequence-point data chains cleanly across generations.
+    - *Update 2025-11-08 (late pm)*: Added a companion PDB regression for property getters, mirroring the
+      multi-generation method test so accessor edits now verify portable PDB chaining as well.
     - *Update 2025-11-08 (late pm)*: Added `mdv validates consecutive closure edits`, which drives
       `FSharpChecker` through two closure updates, captures both metadata blobs, and asserts `mdv`
       outputs the updated literals for generations 1 and 2. This raises confidence in closure-heavy

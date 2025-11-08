@@ -165,6 +165,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
       resulting Property/PropertyMap table counts plus EncLog entries. This ensures regressions in the
       writer surface immediately without running the heavier component suites. Expand this suite as we
       light up Event/MethodSemantics rows.
+    - *Update 2025-11-08 (pm)*: Extended the service tests with an event/add accessor scenario so the
+      writer now has unit coverage for Event/EventMap rows and MethodSemantics entries (Adder). This keeps
+      the fast suite aligned with the emitter as we continue enabling runtime apply.
      - broaden `MdvValidationTests.fs` to cover multi-generation changes (closure, async, add/remove) and assert mdv output and EncLog/EncMap contents match the target Roslyn dump.
      - update `HotReload/PdbTests.fs` (and the CLI smoke tests) to ensure PDB deltas reuse method handles across generations.
      - rerun `fsc-watch` with and without runtime apply to verify `MetadataUpdater.ApplyUpdate` succeeds once the writer parity work is complete.

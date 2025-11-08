@@ -168,6 +168,11 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
     - *Update 2025-11-08 (pm)*: Extended the service tests with an event/add accessor scenario so the
       writer now has unit coverage for Event/EventMap rows and MethodSemantics entries (Adder). This keeps
       the fast suite aligned with the emitter as we continue enabling runtime apply.
+    - *Update 2025-11-08 (late pm)*: The helper-based component regressions (`mdv helper validates added property/event metadata`)
+      now decode the emitted metadata and assert Property/Event/Map row counts while also checking the
+      `IlxDelta.EncLog` payload for the matching `AddProperty`/`AddEvent` operations. This ensures the
+      full IlxDeltaEmitter → metadata writer pipeline produces Roslyn-parity rows, not just the unit-level
+      writer tests.
      - broaden `MdvValidationTests.fs` to cover multi-generation changes (closure, async, add/remove) and assert mdv output and EncLog/EncMap contents match the target Roslyn dump.
      - update `HotReload/PdbTests.fs` (and the CLI smoke tests) to ensure PDB deltas reuse method handles across generations.
      - rerun `fsc-watch` with and without runtime apply to verify `MetadataUpdater.ApplyUpdate` succeeds once the writer parity work is complete.

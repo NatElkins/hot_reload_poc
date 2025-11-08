@@ -159,7 +159,12 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
      - *Update 2025-11-08 (late pm)*: Reintroduced `IlDeltaStreamBuilder` component tests that exercise the new builder API (method-body emission + standalone signatures) so we keep regression coverage on the raw stream encoder.
   7. **PDB alignment** – update `HotReloadPdb.emitDelta` to consume the enriched baseline (`AddedOrChangedMethodInfo`, Enc IDs, synthesized member map) when it emits sequence points. Roslyn reference: `EditAndContinueMethodDebugInformationWriter` and `PortablePdbBuilder` in `MetadataWriter.cs`.
   8. **Tests & validation** – once rows are fully emitted:
-     - add targeted writer tests (`tests/FSharp.Compiler.Service.Tests/HotReload/FSharpDeltaMetadataWriterTests.fs`) that compare the emitted table slices/Enc tables against Roslyn expectations.
+    - *Update 2025-11-08*: Added the first service-level metadata writer fact in
+      `tests/FSharp.Compiler.Service.Tests/HotReload/FSharpDeltaMetadataWriterTests.fs`. The helper now
+      emits a minimal property host module, invokes `FSharpDeltaMetadataWriter.emit`, and asserts the
+      resulting Property/PropertyMap table counts plus EncLog entries. This ensures regressions in the
+      writer surface immediately without running the heavier component suites. Expand this suite as we
+      light up Event/MethodSemantics rows.
      - broaden `MdvValidationTests.fs` to cover multi-generation changes (closure, async, add/remove) and assert mdv output and EncLog/EncMap contents match the target Roslyn dump.
      - update `HotReload/PdbTests.fs` (and the CLI smoke tests) to ensure PDB deltas reuse method handles across generations.
      - rerun `fsc-watch` with and without runtime apply to verify `MetadataUpdater.ApplyUpdate` succeeds once the writer parity work is complete.

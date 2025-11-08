@@ -251,6 +251,16 @@ let startWatchLoop (session: WatchSession) (applyRuntimeUpdate: bool) (mdvComman
                             log (sprintf "Hot reload applied. Generation %d" session.Generation)
                             if delta.UpdatedMethods.Length > 0 then
                                 log (sprintf "  Updated methods: %A" delta.UpdatedMethods)
+                            if delta.AddedOrChangedMethods.Length > 0 then
+                                delta.AddedOrChangedMethods
+                                |> List.iter (fun info ->
+                                    log
+                                        (sprintf
+                                            "    method 0x%08X locals 0x%08X offset %d length %d"
+                                            info.MethodToken
+                                            info.LocalSignatureToken
+                                            info.CodeOffset
+                                            info.CodeLength))
                             if delta.UpdatedTypes.Length > 0 then
                                 log (sprintf "  Updated types: %A" delta.UpdatedTypes)
                         if quitAfterDelta then

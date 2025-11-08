@@ -7,4 +7,4 @@ module Target =
 
     let GetMessage () =
         counter <- counter + 1
-        sprintf "Message version hashwait (invocation #%d)" counter
+        sprintf "Message version hashwait 2 (invocation #%d)" counter

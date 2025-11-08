@@ -184,6 +184,10 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
       `FSharpChecker` through two closure updates, captures both metadata blobs, and asserts `mdv`
       outputs the updated literals for generations 1 and 2. This raises confidence in closure-heavy
       scenarios (beyond simple method bodies) without relying on helper IL modules.
+    - *Update 2025-11-08 (late pm)*: Added `mdv validates consecutive async method edits`, exercising the
+      async workflow path across two generations via `FSharpChecker` and ensuring mdv reports the updated
+      literals for both deltas. Async scenarios now have the same multi-generation coverage as baseline
+      and closure cases.
      - broaden `MdvValidationTests.fs` to cover multi-generation changes (closure, async, add/remove) and assert mdv output and EncLog/EncMap contents match the target Roslyn dump.
      - update `HotReload/PdbTests.fs` (and the CLI smoke tests) to ensure PDB deltas reuse method handles across generations.
      - rerun `fsc-watch` with and without runtime apply to verify `MetadataUpdater.ApplyUpdate` succeeds once the writer parity work is complete.

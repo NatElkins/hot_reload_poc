@@ -219,6 +219,7 @@
 
 - `FSharpPdbDeltaBuilder`
   - Materialised in `HotReloadPdb.emitDelta`, which reads the updated portable PDB emitted by `ILWriter`, lifts Document/MethodDebugInformation blobs for updated tokens, and writes a delta via `PortablePdbBuilder`.
+    - **Update 2025-11-09**: The PDB writer now consumes the precise `AddedOrChangedMethodInfo` list produced by `IlxDeltaEmitter` instead of a precomputed token bag. This keeps the delta strictly tied to the IL bodies that changed (matching Roslyn’s `EditAndContinueMethodDebugInformationWriter`), avoids emitting debug rows for metadata-only edits, and lets the test harness assert that property/event accessor deltas only surface when their accessor methods actually carried new IL.
   - Respects baseline table lengths captured in `FSharpEmitBaseline.PortablePdb`, populating `EncLog`/`EncMap` entries for each touched method so the runtime can remap sequence points.
   - Currently emits method-level debug info (sequence point blobs when available); local scope/async metadata will be layered once Task 2.1/2.5 add richer ILX instrumentation.
 - `FSharpEmitBaseline.PortablePdb`

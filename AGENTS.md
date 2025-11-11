@@ -14,6 +14,7 @@ The primary solution sits at `hot_reload_poc/HotReloadPoc.sln`, grouping the F# 
 ## Coding Style & Naming Conventions
 Follow the existing F# style: four-space indentation, module-qualified functions, and `CamelCase` modules or types. Favor pipeline-friendly expressions over nested calls, and keep reflection helpers in separate modules (see `DeltaGenerator.fs`). For the C# samples, stick to `PascalCase` types, camelCase locals, and 120-character lines. Run `dotnet format` on touched projects before submitting; it keeps both F# and C# sources aligned with SDK defaults.
 - When adding new public or internal types/functions, include XML documentation comments so downstream agents understand their responsibilities without re-reading the implementation.
+- Leave short inline comments whenever you touch tricky hot-reload logic (EncLog bookkeeping, heap offsets, etc.) so the next agent understands the intent without re-deriving Roslyn parity from scratch.
 
 ## Testing Guidelines
 There is no dedicated test project yet, so treat the console output from `HotReloadTest` as the regression gate: confirm the baseline compilation, delta application, and re-invocation sequences all succeed. When introducing new patch scenarios, add deterministic checks (e.g., validating `SimpleLib.GetValue()` responses) and capture expected console markers in comments. If you add a formal test suite, wire it up via `Microsoft.NET.Test.Sdk` and expose it through `dotnet test` so CI can exercise it uniformly.

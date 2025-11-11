@@ -230,7 +230,11 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   5. 🟢 **Done (2025-11-11)** – The AbstractIL serializer is now the default (and only) metadata path. `DeltaMetadataSerializer` always emits the metadata root, `FSharpDeltaMetadataWriter` no longer calls `MetadataRootBuilder.Serialize`, and the old `FSHARP_HOTRELOAD_USE_ABSTRACTIL` flag has been removed. Parity tests now derive their SRM baseline by serializing the mutated `MetadataBuilder` inside the test harness.
   6. 🟢 **Done (2025-11-11)** – Reordered `FSharp.Compiler.Service.fsproj` so `DeltaMetadataTables.fs` compiles before `DeltaMetadataSerializer.fs`/`FSharpDeltaMetadataWriter.fs`, preventing undefined-type errors now that `TableRows` lives in a shared module.
   7. 🟢 **Done (2025-11-11)** – Updated `DeltaMetadataSerializer.align4` to mask with `~~~3`, matching Roslyn’s helper and restoring correct padding on net9+/ARM builds.
-  3. Once every shared record lives in the new module, reintroduce the `TableRows` DTO at namespace scope (referencing only plain arrays of `RowElementData`), then proceed with exposing the AbstractIL mirror.
+  8. 🔴 **Blocked (2025-11-11)** – While attempting to flesh out `FSharpMetadataAggregatorTests`, the netstandard build surfaced that `CodeGen/DeltaMetadataTables.fs` still depends on `ILBinaryWriter.MetadataTable<'T>`, `UnsharedRow`, and helper functions (`UShort`, `HasSemantics`, etc.) that are not exposed through `ilwrite.fsi`. This means any clean build targeting netstandard fails before we can exercise the new aggregator coverage. **Plan:**
+      1. Introduce a lightweight `RowElement`/`RowTable` helper in `CodeGen` that mirrors the handful of APIs we use from `ILBinaryWriter` (shared string/blob/guid heaps + row accumulators) but materialises rows directly as `RowElementData[]`.
+      2. Update `DeltaMetadataTables.fs` to use the new helper (no `open FSharp.Compiler.AbstractIL.ILBinaryWriter`) and regenerate the heap/table bytes solely from `RowElementData`, removing the last dependency on IL writer internals.
+      3. Add targeted unit tests that build a synthetic module, invoke the rewritten tables, and assert the resulting metadata blobs match the previous output so we can confidently remove the old dependency.
+      4. Once this refactor lands, re-run the aggregator metadata tests so their coverage becomes unblocked.
 
 ### Task 2.4 – Runtime Integration Hooks
 - **Scope**: Add compiler entry points to trigger delta generation and integrate feature flags.

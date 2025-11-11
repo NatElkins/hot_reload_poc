@@ -233,6 +233,12 @@
 - `FSharpEmitBaseline.PortablePdb`
   - Stores the baseline portable PDB bytes, row counts, and optional entry point token captured during `fsc` baseline emission so later deltas can compute correct relative row ids.
 
+#### 4.2.8 Remaining Metadata/PDB Work (2025-11-13)
+
+- **DeltaIndexSizing / DeltaTableLayout parity** – Replace the remaining AbstractIL sizing helpers with computations derived from the mirror data so coded-index flags/bitmasks match Roslyn’s `MetadataSizes` (see `roslyn/src/Compilers/Core/Portable/PEWriter/MetadataSizes.cs`). This affects `DeltaIndexSizing.fs`, `DeltaTableLayout.fs`, `DeltaMetadataSerializer.fs`, and the writer tests.
+- **Aggregator + mdv multi-generation coverage** – Use the new `MetadataDeltaTestHelpers.fs` builders to emit Gen1/Gen2 property + event deltas, then extend `FSharpMetadataAggregatorTests.fs`, `MdvValidationTests.fs`, and `PdbTests.fs` to assert EncLog/EncMap/mdv output across generations.
+- **Runtime demo validation** – Update `tests/projects/HotReloadDemo/HotReloadDemoApp` (and its scripted smoke test) to emit real metadata/IL/PDB blobs, invoke `MetadataUpdater.ApplyUpdate`, and log the mdv command + before/after literals. This becomes the acceptance gate showing that the emitted deltas can be applied by the runtime without restarting the process.
+
 #### 4.2.7 Definition remapping (SymbolMatcher)
 
 Roslyn relies on `SymbolMatcher` and language-specific visitors (for C#, `CSharpSymbolMatcher`) to translate symbols captured in an earlier `EmitBaseline` into the current compilation. The matcher merges anonymous types, synthesized closures/state machines, and deleted members so the delta writer can reuse metadata handles and avoid emitting duplicates. F# needs an equivalent component:

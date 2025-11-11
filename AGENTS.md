@@ -36,6 +36,7 @@ Keep commits focused and descriptive in sentence case (see `git log --oneline` f
 - Documentation: `docs/HotReload.md` has been refreshed to describe the new sample workflow and to capture the remaining limitations/follow-ups.
 - Immediate focus: finish Task 3.5 to restore a working console sample, then resume Task 2.x follow-ups (locals, synthesized member mapping) and telemetry/capability work.
 - Latest verification (2025-11-02): `./.dotnet/dotnet build FSharp.sln -c Debug`, `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`, and `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload` all pass. The hot reload console sample must be fixed before using it as a regression gate again.
+- When updating shared plan/docs/guidelines, add short inline comments in code/tests documenting non-obvious behaviors (e.g., why EncLog expects `AddPropertyMap`) so future agents can reason about deltas without re-reading Roslyn.
 
 ---
 

@@ -24,5 +24,19 @@
       "EncLog": 7,
       "EncMap": 7
     }
+  },
+  {
+    "delta": 3,
+    "rows": {
+      "Module": 1,
+      "TypeRef": 2,
+      "MethodDef": 1,
+      "Param": 1,
+      "MemberRef": 1,
+      "CustomAttribute": 1,
+      "StandAloneSig": 1,
+      "EncLog": 8,
+      "EncMap": 8
+    }
   }
 ]

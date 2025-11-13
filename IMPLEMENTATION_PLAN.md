@@ -161,6 +161,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
          - Add mdv component tests that drive property/event edits across two generations and assert EncLog/EncMap + mdv output match Roslyn dumps (`AddProperty`, `UpdateMethod`, etc.).
          - Teach the aggregator tests to translate method + string handles for baseline/Gen1/Gen2 so `TranslateHandle` is proven once multiple deltas exist.
        - Acceptance: New tests fail prior to the fixes and pass afterwards; component/service HotReload filters remain green.
+       - **Status 2025-11-13 (late pm)**: `MetadataDeltaTestHelpers` now provides property/event multi-generation builders that reuse baseline heap offsets, and `FSharpMetadataAggregatorTests` consumes them to validate method/string handle translation across Gen1/Gen2 sequences.
 
     3. **Runtime demo validation (`HotReloadDemoApp`)**
        - Files: `tests/projects/HotReloadDemo/HotReloadDemoApp`, `tests/scripts/hot-reload-demo-smoke.sh`, documentation in `docs/HotReload.md`.

@@ -56,8 +56,19 @@ throwaway `hot_reload_poc` harness.
    below for the current runtime status).
 
 5. **Repeat** steps 3-4 for additional generations or type `q` followed by
-   Enter to exit. The demo automatically tears down the hot reload session and
-   deletes the temporary working directory.
+ Enter to exit. The demo automatically tears down the hot reload session and
+  deletes the temporary working directory.
+
+### Capturing delta artifacts and running mdv
+
+- Set `FSHARP_HOTRELOAD_DUMP_DELTA=1` before launching the demo to keep each
+  generation's metadata/IL/PDB payloads under the temporary working directory
+  (see the console log for the exact path). The app prints the matching `mdv`
+  command so you can inspect the delta manually.
+- Set `FSHARP_HOTRELOAD_RUN_MDV=1` to have the demo automatically invoke `mdv`
+  after every successful delta. By default it assumes `mdv` is on your `PATH`;
+  override this via `FSHARP_HOTRELOAD_MDV_PATH=/path/to/mdv` if you keep the
+  tool elsewhere. The console displays both stdout/stderr from the `mdv` run.
 
 ### Why the old `hot_reload_poc` harness was removed
 

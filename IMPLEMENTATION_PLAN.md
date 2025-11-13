@@ -495,6 +495,7 @@ Each task must:
   - Every new scenario logs the Roslyn commit/hash used for expectation values so future parity updates are traceable.
   - F# tests fail with actionable diffs (row numbers, heap deltas) whenever metadata diverges, enabling true TDD for heap-reuse fixes.
   - IMPLEMENTATION_PLAN.md and ARCHITECTURE_PROPOSAL.md capture which Roslyn tests are mirrored, the remaining gaps, and instructions for updating baselines when Roslyn behavior changes.
+- **Update (2025-11-13)**: Step 1 now asserts explicit `EncLog`/`EncMap` sequences for the property/event metadata-writer scenarios, comparing the in-memory rows to what we reopen from the serialized metadata. This locks down the first Roslyn parity checkpoints before we add closure/async coverage.
 - **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.

@@ -50,5 +50,15 @@
     "EncMap": 42,
     "AssemblyRef": 2,
     "MethodSpec": 1
+  },
+  "EventUpdate": {
+    "Module": 1,
+    "TypeRef": 5,
+    "MethodDef": 1,
+    "MemberRef": 4,
+    "TypeSpec": 1,
+    "EncLog": 12,
+    "EncMap": 12,
+    "AssemblyRef": 1
   }
 }

@@ -3,6 +3,10 @@
     {
       "document": "EventHost.cs",
       "update": "updates/EventHost_v1.cs"
+    },
+    {
+      "document": "EventHost.cs",
+      "update": "updates/EventHost_v2.cs"
     }
   ]
 }

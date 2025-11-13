@@ -23,6 +23,12 @@
       "metadata": "/Users/nat/Projects/hot_reload_poc/tools/roslyn-baselines/EventSample/bin/Debug/net10.0/EventSample.dll.1.dmeta",
       "il": "/Users/nat/Projects/hot_reload_poc/tools/roslyn-baselines/EventSample/bin/Debug/net10.0/EventSample.dll.1.dil",
       "pdb": "/Users/nat/Projects/hot_reload_poc/tools/roslyn-baselines/EventSample/bin/Debug/net10.0/EventSample.dll.1.dpdb"
+    },
+    {
+      "assembly": "",
+      "metadata": "/Users/nat/Projects/hot_reload_poc/tools/roslyn-baselines/EventSample/bin/Debug/net10.0/EventSample.dll.2.dmeta",
+      "il": "/Users/nat/Projects/hot_reload_poc/tools/roslyn-baselines/EventSample/bin/Debug/net10.0/EventSample.dll.2.dil",
+      "pdb": "/Users/nat/Projects/hot_reload_poc/tools/roslyn-baselines/EventSample/bin/Debug/net10.0/EventSample.dll.2.dpdb"
     }
   ]
 }

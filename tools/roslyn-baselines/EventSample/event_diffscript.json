@@ -1,0 +1,8 @@
+{
+  "changes": [
+    {
+      "document": "EventHost.cs",
+      "update": "updates/EventHost_v1.cs"
+    }
+  ]
+}

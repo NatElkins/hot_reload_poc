@@ -1,42 +1,54 @@
-[
-  {
-    "delta": 1,
-    "rows": {
-      "Module": 1,
-      "TypeRef": 1,
-      "TypeDef": 1,
-      "MethodDef": 3,
-      "Param": 2,
-      "MemberRef": 1,
-      "StandAloneSig": 1,
-      "EncLog": 13,
-      "EncMap": 11
-    }
+{
+  "Property": {
+    "Module": 1,
+    "TypeRef": 1,
+    "TypeDef": 1,
+    "MethodDef": 3,
+    "Param": 2,
+    "MemberRef": 1,
+    "StandAloneSig": 1,
+    "EncLog": 13,
+    "EncMap": 11,
+    "AssemblyRef": 1,
+    "NestedClass": 1
   },
-  {
-    "delta": 2,
-    "rows": {
-      "Module": 1,
-      "TypeRef": 1,
-      "MethodDef": 2,
-      "Param": 2,
-      "StandAloneSig": 1,
-      "EncLog": 7,
-      "EncMap": 7
-    }
+  "PropertyUpdate": {
+    "Module": 1,
+    "TypeRef": 1,
+    "MethodDef": 2,
+    "Param": 2,
+    "StandAloneSig": 1,
+    "EncLog": 7,
+    "EncMap": 7,
+    "AssemblyRef": 1
   },
-  {
-    "delta": 3,
-    "rows": {
-      "Module": 1,
-      "TypeRef": 2,
-      "MethodDef": 1,
-      "Param": 1,
-      "MemberRef": 1,
-      "CustomAttribute": 1,
-      "StandAloneSig": 1,
-      "EncLog": 8,
-      "EncMap": 8
-    }
+  "Async": {
+    "Module": 1,
+    "TypeRef": 2,
+    "MethodDef": 1,
+    "Param": 1,
+    "MemberRef": 1,
+    "CustomAttribute": 1,
+    "StandAloneSig": 1,
+    "EncLog": 8,
+    "EncMap": 8,
+    "AssemblyRef": 1
+  },
+  "Event": {
+    "Module": 1,
+    "TypeRef": 10,
+    "Field": 1,
+    "MethodDef": 3,
+    "Param": 2,
+    "MemberRef": 10,
+    "CustomAttribute": 8,
+    "StandAloneSig": 1,
+    "Event": 1,
+    "MethodSemantics": 2,
+    "TypeSpec": 1,
+    "EncLog": 48,
+    "EncMap": 42,
+    "AssemblyRef": 2,
+    "MethodSpec": 1
   }
-]
+}

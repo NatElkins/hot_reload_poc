@@ -510,6 +510,7 @@ Each task must:
 - **Update (2025-11-13, +11h)**: Event deltas now assert the same Roslyn `EncLog`/`EncMap` counts so EncLog growth in event scenarios is caught immediately.
 - **Update (2025-11-13, +11.25h)**: Async hot reload deltas now match Roslyn `EncLog`/`EncMap` row counts using the new baseline captured with `hotreload-delta-gen`.
 - **Update (2025-11-13, +11.5h)**: Property multi-generation deltas now use the same Roslyn row counts for both generations, preventing cumulative EncLog drift.
+- **Update (2025-11-13, +11.75h)**: Event/async multi-generation deltas now reuse Roslyn row counts for both generations, keeping EncLog/EncMap growth in check.
 - **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.

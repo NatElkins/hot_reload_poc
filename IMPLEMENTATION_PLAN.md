@@ -479,3 +479,23 @@ Each task must:
   - Teach `FSharpSymbolMatcher` to import the map (mirroring Roslyn’s `SynthesizedTypeMaps`) so nested helper types resolve to baseline definitions.
   - Update `IlxDeltaEmitter` to consult the map before classifying helpers as new entities, keeping closure/async state machines aligned with baseline metadata.
   - Tests: keep the existing closure regression, add an async state-machine mdv regression, and add a checker-level unit test that ensures the map flows through public APIs.
+
+### Task 2.x.a – Roslyn parity regression suite (new)
+- **Scope**: Mirror Roslyn’s Edit-and-Continue regression matrix so every hot reload delta we emit is compared against an equivalent C# scenario. The focus is verifying `EncLog`/`EncMap` contents, heap sizing, and metadata row counts rather than IL diffs.
+- **Reference Files**: `roslyn/src/Compilers/CSharp/Test/Emit2/Emit/EditAndContinue/EditAndContinueTests.cs`, `EditAndContinueStateMachineTests.cs`, and helpers in `EditAndContinueTestBase.cs` (especially `CheckEncMap`, `VerifyIL`, `CheckEncLog`). These tests already validate metadata tables for properties, events, closures, async state machines, and rude edits.
+- **F# Adaptation Plan** (TDD-friendly, each bullet -> individual PR/commit):
+  1. *Table + heap verification harness*: extend `tests/FSharp.Compiler.Service.Tests/HotReload/FSharpDeltaMetadataWriterTests.fs` with Roslyn-like inspectors so we can assert `EncLog`, `EncMap`, heap sizes, and stream names by reopening emitted metadata (today we only assert byte-for-byte table parity). Add helpers similar to Roslyn’s `EncValidation` utilities that accept expected handles/rows so new scenarios are concise. Initial coverage: property/event addition and closure method-body updates.
+  2. *State machine + closure scenarios*: port Roslyn’s `EditAndContinueStateMachineTests.AwaitExpressions` and `EditAndContinueTests.LambdaCaptures` into equivalent F# snippets (async workflows, computation expressions, task builders). Each test compiles a baseline + generation using the checker-driven helpers from `MetadataDeltaTestHelpers.fs`, then asserts:
+     - `EncMap` only lists the rows Roslyn expects (TypeDef, MethodDef, Property, Event, CustomAttribute rows as appropriate).
+     - `EncLog` operations match the Roslyn order for `AddMethod`, `AddField`, `Default`, etc.
+     - Heap byte counts align with the handles touched by the edit (e.g., `StringHeap` grows only for new identifiers, not baseline copies).
+  3. *Exception + rude edit coverage*: adapt Roslyn’s `Constructor_Delete` / `RudeEdit_InsertStaticCtor` flows to F# modules so we file bugs whenever our diagnostics diverge. These tests should assert `HotReloadDiagnostic` payloads plus metadata effects, making it obvious when runtime apply would fail.
+  4. *Multi-generation + metadata size comparison*: for each scenario above, add a second delta that reuses baseline handles. Capture both Roslyn and F# delta sizes via `hotreload-utils` harness (`src/csharp_delta_test`) and persist them under `tests/baselines/HotReload/`. Tests fail if F# deltas grow beyond Roslyn by more than 5% for the same edit, flagging heap-reuse regressions early.
+- **Acceptance Criteria**:
+  - Every new scenario logs the Roslyn commit/hash used for expectation values so future parity updates are traceable.
+  - F# tests fail with actionable diffs (row numbers, heap deltas) whenever metadata diverges, enabling true TDD for heap-reuse fixes.
+  - IMPLEMENTATION_PLAN.md and ARCHITECTURE_PROPOSAL.md capture which Roslyn tests are mirrored, the remaining gaps, and instructions for updating baselines when Roslyn behavior changes.
+- **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
+- **Risks/Mitigations**:
+  - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.
+  - *Risk*: Test drift as Roslyn evolves. *Mitigation*: add a `tools/roslyn-parity/README.md` noting the Roslyn commit and script for refreshing expected EncLog/EncMap snapshots.

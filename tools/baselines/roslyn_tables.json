@@ -1,0 +1,28 @@
+[
+  {
+    "delta": 1,
+    "rows": {
+      "Module": 1,
+      "TypeRef": 1,
+      "TypeDef": 1,
+      "MethodDef": 3,
+      "Param": 2,
+      "MemberRef": 1,
+      "StandAloneSig": 1,
+      "EncLog": 13,
+      "EncMap": 11
+    }
+  },
+  {
+    "delta": 2,
+    "rows": {
+      "Module": 1,
+      "TypeRef": 1,
+      "MethodDef": 2,
+      "Param": 2,
+      "StandAloneSig": 1,
+      "EncLog": 7,
+      "EncMap": 7
+    }
+  }
+]

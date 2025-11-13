@@ -500,6 +500,7 @@ Each task must:
 - **Update (2025-11-13, +4h)**: Async/state-machine helper deltas now verify the expected Module → MethodDef → Param → MethodDef sequence, matching Roslyn’s state-machine baselines and asserting the persisted metadata stream as well. With property, event, method, closure, and async checked in this harness, the remaining Step 1 work is multi-generation deltas and direct Roslyn baseline comparisons.
 - **Update (2025-11-13, +5h)**: The async method update scenario (`emitAsyncDeltaArtifacts`) now pins the Module → MethodDef (Default) ordering so we detect regressions in method-body updates too.
 - **Update (2025-11-13, +6h)**: Property multi-generation deltas now share the same `EncLog`/`EncMap` contract for both Gen1 and Gen2, ensuring we catch regressions where later deltas emit extra rows.
+- **Update (2025-11-13, +7h)**: Event multi-generation deltas now assert the Module → MethodDef → Event → EventMap → MethodSemantics sequence for both generations, matching Roslyn’s adder semantics expectations.
 - **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.

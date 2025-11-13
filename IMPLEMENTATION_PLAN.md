@@ -503,6 +503,7 @@ Each task must:
 - **Update (2025-11-13, +7h)**: Event multi-generation deltas now assert the Module → MethodDef → Event → EventMap → MethodSemantics sequence for both generations, matching Roslyn’s adder semantics expectations.
 - **Update (2025-11-13, +8h)**: Async multi-generation deltas now reuse the Module → MethodDef (Default) contract for both generations, so method-body updates can’t silently accumulate extra rows.
 - **Update (2025-11-13, +9h)**: Closure multi-generation deltas assert Module → MethodDef → MethodDef → Param → Param ordering so helper additions stay aligned with Roslyn across generations.
+- **Update (2025-11-13, +9.5h)**: `FSharpMetadataAggregator` tests now cover closure multi-generation handles, ensuring the translator maps later-generation closures back to baseline definitions.
 - **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.

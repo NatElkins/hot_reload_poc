@@ -3,6 +3,10 @@
     {
       "document": "AsyncHost.cs",
       "update": "updates/AsyncHost_v1.cs"
+    },
+    {
+      "document": "AsyncHost.cs",
+      "update": "updates/AsyncHost_v2.cs"
     }
   ]
 }

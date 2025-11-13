@@ -22,18 +22,6 @@
     "EncMap": 7,
     "AssemblyRef": 1
   },
-  "Async": {
-    "Module": 1,
-    "TypeRef": 2,
-    "MethodDef": 1,
-    "Param": 1,
-    "MemberRef": 1,
-    "CustomAttribute": 1,
-    "StandAloneSig": 1,
-    "EncLog": 8,
-    "EncMap": 8,
-    "AssemblyRef": 1
-  },
   "Event": {
     "Module": 1,
     "TypeRef": 10,
@@ -59,6 +47,30 @@
     "TypeSpec": 1,
     "EncLog": 12,
     "EncMap": 12,
+    "AssemblyRef": 1
+  },
+  "Async": {
+    "Module": 1,
+    "TypeRef": 2,
+    "MethodDef": 1,
+    "Param": 1,
+    "MemberRef": 1,
+    "CustomAttribute": 1,
+    "StandAloneSig": 1,
+    "EncLog": 8,
+    "EncMap": 8,
+    "AssemblyRef": 1
+  },
+  "AsyncUpdate": {
+    "Module": 1,
+    "TypeRef": 2,
+    "MethodDef": 1,
+    "Param": 1,
+    "MemberRef": 1,
+    "CustomAttribute": 1,
+    "StandAloneSig": 1,
+    "EncLog": 8,
+    "EncMap": 8,
     "AssemblyRef": 1
   }
 }

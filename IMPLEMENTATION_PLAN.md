@@ -514,7 +514,6 @@ Each task must:
 - **Update (2025-11-13, +11.9h)**: Property multi-generation Gen2 is now compared against the Roslyn property-update baseline so we detect mismatches between add/update deltas.
 - **Update (2025-11-13, +12h)**: Captured Roslyn event update baselines and required F# Gen2 event deltas to match them.
 - **Update (2025-11-13, +12.2h)**: Captured the async update baseline and wired Gen2 async tests to compare against it.
-- **Update (2025-11-13, +12.4h)**: Delta metadata tables now reuse baseline heap offsets (strings/blobs) instead of copying the baseline prefix, shrinking the emitted heaps.
 - **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.

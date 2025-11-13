@@ -506,6 +506,7 @@ Each task must:
 - **Update (2025-11-13, +9.5h)**: `FSharpMetadataAggregator` tests now cover closure multi-generation handles, ensuring the translator maps later-generation closures back to baseline definitions.
 - **Update (2025-11-13, +10h)**: Added Roslyn baseline capture/validator (using `hotreload-utils`) so tests can compare EncLog/EncMap row counts against actual C# deltas.
 - **Update (2025-11-13, +10.5h)**: Introduced parity test (`RoslynBaselineComparisons.fs`) that loads Roslyn EncLog/EncMap row counts from `tools/baselines/roslyn_tables.json` so we can generate alerts whenever the official C# deltas change.
+- **Update (2025-11-13, +10.75h)**: Property deltas must now match Roslyn `EncLog`/`EncMap` row counts exactly (no slack), keeping F# output identical to the captured baseline.
 - **Dependencies**: `tests/FSharp.Compiler.Service.Tests/HotReload/*`, `hotreload-utils/src/hotreload-delta-gen`, and the Roslyn repo clone at `roslyn/`.
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.

@@ -18,6 +18,9 @@ echo "[watchloop-mdv] log file: $LOG_FILE"
 if [[ "$KEEP_TMP" != "1" ]]; then
     echo "[watchloop-mdv] set KEEP_TMP=1 to preserve artifacts after the run"
 fi
+if [[ "${FSHARP_HOTRELOAD_TRACE_STRINGS:-0}" != "1" ]]; then
+    echo "[watchloop-mdv] hint: export FSHARP_HOTRELOAD_TRACE_STRINGS=1 to log literals from fsc-watch"
+fi
 
 cleanup() {
     if [[ "$KEEP_TMP" == "1" ]]; then

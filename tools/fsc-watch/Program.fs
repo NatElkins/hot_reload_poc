@@ -261,6 +261,8 @@ let startWatchLoop (session: WatchSession) (applyRuntimeUpdate: bool) (mdvComman
                                             info.LocalSignatureToken
                                             info.CodeOffset
                                             info.CodeLength))
+                            if delta.UserStringUpdates.Length > 0 then
+                                log (sprintf "  User strings updated: %d" delta.UserStringUpdates.Length)
                             if delta.UpdatedTypes.Length > 0 then
                                 log (sprintf "  Updated types: %A" delta.UpdatedTypes)
                         if quitAfterDelta then

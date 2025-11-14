@@ -70,6 +70,13 @@ throwaway `hot_reload_poc` harness.
   override this via `FSHARP_HOTRELOAD_MDV_PATH=/path/to/mdv` if you keep the
   tool elsewhere. The console displays both stdout/stderr from the `mdv` run.
 
+### Tracing user-string updates
+
+- Set `FSHARP_HOTRELOAD_TRACE_STRINGS=1` to have both the demo console and
+  `fsc-watch` print the literals recorded in `UserStringUpdates` for each delta.
+  The flag is off by default to keep logs quiet; enabling it is useful when
+  comparing F# deltas against Roslyn or diagnosing `#US` heap regressions.
+
 ### Why the old `hot_reload_poc` harness was removed
 
 - The new demo exercises the real compiler pipeline (typed-tree diff,

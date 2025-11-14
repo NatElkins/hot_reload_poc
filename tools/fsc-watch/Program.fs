@@ -19,6 +19,13 @@ let private log message =
     let timestamp = DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture)
     printfn "[fsc-watch %s] %s" timestamp message
 
+let private shouldTraceUserStrings () =
+    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_STRINGS") with
+    | null -> false
+    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+    | _ -> false
+
 let printUsage () =
     printfn "Usage: fsc-watch <path-to-project.fsproj> [--configuration <CONFIG>] [--framework <TFM>] [--no-runtime-apply]"
     printfn "       [--invoke Namespace.Type.Method] [--interval <seconds>] [--dump-deltas <DIR>] [--validate-with-mdv]"
@@ -261,8 +268,10 @@ let startWatchLoop (session: WatchSession) (applyRuntimeUpdate: bool) (mdvComman
                                             info.LocalSignatureToken
                                             info.CodeOffset
                                             info.CodeLength))
-                            if delta.UserStringUpdates.Length > 0 then
-                                log (sprintf "  User strings updated: %d" delta.UserStringUpdates.Length)
+                            if shouldTraceUserStrings () && delta.UserStringUpdates.Length > 0 then
+                                log "  Updated user strings:"
+                                delta.UserStringUpdates
+                                |> List.iter (fun (_, _, literal) -> log (sprintf "    \"%s\"" literal))
                             if delta.UpdatedTypes.Length > 0 then
                                 log (sprintf "  Updated types: %A" delta.UpdatedTypes)
                         if quitAfterDelta then

@@ -32,6 +32,7 @@ let printUsage () =
     printfn "       [--mdv-command-only]   (emit deltas, print mdv command, skip runtime apply/invocation)"
     printfn "       [--quit-after-delta]   (stop after first successful delta emission)"
     printfn "       [--clean-build]        (delete bin/ and obj/ before capturing compiler arguments)"
+    printfn "       (set FSHARP_HOTRELOAD_TRACE_STRINGS=1 to log user-string updates for each delta)"
 
 let parseArgs (argv: string[]) =
     if argv.Length = 0 then None

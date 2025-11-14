@@ -13,6 +13,12 @@ DELTA_DIR="$TMP_DIR/deltas"
 RESTORE_FILE="$TMP_DIR/Message.fs.bak"
 KEEP_TMP=${KEEP_TMP:-0}
 
+echo "[watchloop-mdv] temp dir: $TMP_DIR"
+echo "[watchloop-mdv] log file: $LOG_FILE"
+if [[ "$KEEP_TMP" != "1" ]]; then
+    echo "[watchloop-mdv] set KEEP_TMP=1 to preserve artifacts after the run"
+fi
+
 cleanup() {
     if [[ "$KEEP_TMP" == "1" ]]; then
         echo "Preserving temp directory: $TMP_DIR"

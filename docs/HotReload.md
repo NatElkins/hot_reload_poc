@@ -70,8 +70,9 @@ throwaway `hot_reload_poc` harness.
   override this via `FSHARP_HOTRELOAD_MDV_PATH=/path/to/mdv` if you keep the
   tool elsewhere. The console displays both stdout/stderr from the `mdv` run.
 - Set `FSHARP_HOTRELOAD_KEEP_WORKDIR=1` (or `HOTRELOAD_SMOKE_KEEP_WORKDIR=1`
-  when using `tests/scripts/hot-reload-demo-smoke.sh`) to keep the temporary
-  working directory so you can inspect the dumped deltas after the run.
+  when using `tests/scripts/hot-reload-demo-smoke.sh`, or pass `--keep-workdir`
+  to the demo) to keep the temporary working directory so you can inspect the
+  dumped deltas after the run.
 
 ### Tracing user-string updates
 

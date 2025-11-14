@@ -28,10 +28,10 @@ throwaway `hot_reload_poc` harness.
 
 2. **Run the demo console app (auto mode):**
 
-   ```bash
-   cd tests/projects/HotReloadDemo/HotReloadDemoApp
-   ../../../.dotnet/dotnet run
-   ```
+ ```bash
+  cd tests/projects/HotReloadDemo/HotReloadDemoApp
+  ../../../.dotnet/dotnet run
+  ```
 
    The executable copies `DemoTarget.fs` into a temporary working directory,
    compiles it with `FSharpChecker.StartHotReloadSession`, edits the file on
@@ -69,6 +69,9 @@ throwaway `hot_reload_poc` harness.
   after every successful delta. By default it assumes `mdv` is on your `PATH`;
   override this via `FSHARP_HOTRELOAD_MDV_PATH=/path/to/mdv` if you keep the
   tool elsewhere. The console displays both stdout/stderr from the `mdv` run.
+- Set `FSHARP_HOTRELOAD_KEEP_WORKDIR=1` (or `HOTRELOAD_SMOKE_KEEP_WORKDIR=1`
+  when using `tests/scripts/hot-reload-demo-smoke.sh`) to keep the temporary
+  working directory so you can inspect the dumped deltas after the run.
 
 ### Tracing user-string updates
 

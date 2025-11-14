@@ -65,9 +65,15 @@ PY
 
 wait "$WATCH_PID"
 
-CMD_LINE=$(grep '"/g:' "$LOG_FILE" | tail -1)
+CMD_SCRIPT="$DELTA_DIR/gen1/mdv-gen1.cmd"
+if [[ -f "$CMD_SCRIPT" ]]; then
+    CMD_LINE=$(cat "$CMD_SCRIPT")
+else
+    CMD_LINE=$(grep '"/g:' "$LOG_FILE" | tail -1)
+fi
+
 if [[ -z "$CMD_LINE" ]]; then
-    echo "Failed to locate mdv command in log:" >&2
+    echo "Failed to locate mdv command (checked $CMD_SCRIPT and log)." >&2
     cat "$LOG_FILE" >&2
     exit 1
 fi

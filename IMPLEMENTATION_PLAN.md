@@ -134,7 +134,8 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
       - **Status 2025-11-15 (midday)**: Extended the coverage to property/event multi-generation deltas so both Gen1 and Gen2 string heaps prove the accessor names stay in the baseline heap (service HotReload filter).
       - **Status 2025-11-15 (afternoon +1)**: Added property/event multi-generation string-heap size regressions to ensure Gen1 and Gen2 deltas keep identical heap footprints while reusing baseline names.
       - **Status 2025-11-15 (afternoon +2)**: Added the async multi-generation string-heap size regression so method-body edits retain their baseline string footprint across generations (HotReload service filter).
-      - **Status 2025-11-15 (afternoon)**: Added an async string-heap regression to ensure method-body-only edits reuse baseline user strings; future work will extend this to multi-generation async helpers once the delta mirrors baseline literals.
+      - **Status 2025-11-15 (afternoon)**: Added an async string-heap regression to ensure method-body-only edits reuse baseline user strings.
+      - **Status 2025-11-15 (evening)**: Service-level metadata writer tests now assert both single-generation and multi-generation async deltas keep the `#US` heap empty, proving user string literals stay pinned to the baseline across generations.
       - **Status 2025-11-12**: `MdvValidationTests` gained the multi-generation property helper; both metadata blobs and EncLog slices now match the Roslyn reference dumps across Gen1/Gen2.
       - **Status 2025-11-12 (evening)**: `DeltaMetadataTables` uses dedicated row + heap builders (no `ILBinaryWriter` tables), and `DeltaMetadataSerializer` no longer imports `ILBinaryWriter`.
       - **Status 2025-11-12 (late night)**: Added `MetadataDeltaTestHelpers.fs` + `FSharpMetadataAggregatorTests.fs` so the aggregator path is validated end-to-end (baseline + delta readers, method + string handle translation).

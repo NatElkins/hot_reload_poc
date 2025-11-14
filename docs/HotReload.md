@@ -113,7 +113,7 @@ throwaway `hot_reload_poc` harness.
 
   The script cleans the watch-loop sample (`tools/fsc-watch/sample/WatchLoop`), launches `fsc-watch` in `--mdv-command-only` mode, rewrites `Message.fs` once, and then executes the emitted `mdv` command. If everything were healthy the script would report “mdv validation succeeded”; at the moment it fails with a truncated literal, giving us a concrete reproduction while we diagnose Task 3.7.
 
-  Tip: set `FSHARP_HOTRELOAD_TRACE_STRINGS=1` when running the script (it already forwards the flag to `fsc-watch`) to dump the `UserStringUpdates` trace lines in `fsc_watch.log`, which makes it easy to confirm which literal changed before invoking `mdv`.
+  Tips: set `FSHARP_HOTRELOAD_TRACE_STRINGS=1` when running the script (it already forwards the flag to `fsc-watch`) to dump the `UserStringUpdates` trace lines in `fsc_watch.log`, and export `KEEP_TMP=1` if you want to keep the temporary directory so you can inspect the captured deltas after the run.
 
 ### Querying capabilities
 

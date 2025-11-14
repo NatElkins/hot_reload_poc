@@ -11,8 +11,13 @@ TMP_DIR=$(mktemp -d /tmp/watchloop-mdv-XXXXXX)
 LOG_FILE="$TMP_DIR/fsc_watch.log"
 DELTA_DIR="$TMP_DIR/deltas"
 RESTORE_FILE="$TMP_DIR/Message.fs.bak"
+KEEP_TMP=${KEEP_TMP:-0}
 
 cleanup() {
+    if [[ "$KEEP_TMP" == "1" ]]; then
+        echo "Preserving temp directory: $TMP_DIR"
+        return
+    fi
     if [[ -f "$RESTORE_FILE" ]]; then
         cp "$RESTORE_FILE" "$MESSAGE_FILE"
     fi
@@ -24,6 +29,7 @@ cp "$MESSAGE_FILE" "$RESTORE_FILE"
 
 DOTNET_MODIFIABLE_ASSEMBLIES=debug \
 FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY=1 \
+FSHARP_HOTRELOAD_TRACE_STRINGS=1 \
 dotnet run --project "$WATCH_PROJECT" -- "$SAMPLE_PROJECT" --mdv-command-only --dump-deltas "$DELTA_DIR" >"$LOG_FILE" 2>&1 &
 WATCH_PID=$!
 
@@ -50,7 +56,7 @@ PY
 
 wait "$WATCH_PID"
 
-CMD_LINE=$(grep ' mdv ' "$LOG_FILE" | tail -1)
+CMD_LINE=$(grep '"/g:' "$LOG_FILE" | tail -1)
 if [[ -z "$CMD_LINE" ]]; then
     echo "Failed to locate mdv command in log:" >&2
     cat "$LOG_FILE" >&2

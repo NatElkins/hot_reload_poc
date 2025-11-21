@@ -10,7 +10,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 
 ## Section 3 – EncLog and EncMap Semantics
 - [x] Ensure EncLog rows emitted with correct FuncCode (add/update) for all added/updated definitions; compare against Roslyn iterator/async expectations.
-- [ ] Ensure EncMap contains all definition tokens in table/RID order; no missing Param/MethodDef/TypeDef entries on updates/adds.
+- [x] Ensure EncMap contains all definition tokens in table/RID order; no missing Param/MethodDef/TypeDef entries on updates/adds.
 - [ ] Add/verify tests that metadata and PDB EncLog/EncMap are identical per generation.
 
 ## Section 4 – Table-by-Table Delta Rules

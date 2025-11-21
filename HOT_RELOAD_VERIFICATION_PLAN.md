@@ -11,7 +11,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 ## Section 3 – EncLog and EncMap Semantics
 - [x] Ensure EncLog rows emitted with correct FuncCode (add/update) for all added/updated definitions; compare against Roslyn iterator/async expectations.
 - [x] Ensure EncMap contains all definition tokens in table/RID order; no missing Param/MethodDef/TypeDef entries on updates/adds.
-- [ ] Add/verify tests that metadata and PDB EncLog/EncMap are identical per generation.
+ - [x] Add/verify tests that metadata and PDB EncLog/EncMap are identical per generation. (component test now compares metadata vs PDB EncLog/EncMap for method update; PDB emission mirrors metadata Enc tables)
 
 ## Section 4 – Table-by-Table Delta Rules
 - [ ] Module: single row per generation; correct Generation/EncId/EncBaseId; Name/Mvid reused; Guid heap grows by one. Test multi-gen mdv output.

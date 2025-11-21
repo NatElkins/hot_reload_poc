@@ -4,8 +4,8 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 
 ## Section 2 – Metadata Container and Heaps
 - [x] Verify metadata root/header emits BSJB signature, stream headers, and heap offsets exactly per spec (baseline lengths used as starts; row-0 entries present) via mdv on baseline and deltas.
-- [ ] Add/confirm tests that string/blob/user-string/guid heap starts equal baseline sizes in every delta (service + component HotReload tests; mdv parsing).
-- [ ] Confirm EncId/EncBaseId chaining in Module row across multi-gen deltas; ensure one new GUID per generation and stable Name/Mvid (service/component tests).
+- [x] Add/confirm tests that string/blob/user-string/guid heap starts equal baseline sizes in every delta (service + component HotReload tests; mdv parsing).
+- [x] Confirm EncId/EncBaseId chaining in Module row across multi-gen deltas; ensure one new GUID per generation and stable Name/Mvid (service/component tests).
 - [ ] Ensure heap suffix only contains new literals/blobs; verify bounds with mdv and existing heap-growth guards.
 
 ## Section 3 – EncLog and EncMap Semantics

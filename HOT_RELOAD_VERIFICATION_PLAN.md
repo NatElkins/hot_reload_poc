@@ -14,7 +14,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
  - [x] Add/verify tests that metadata and PDB EncLog/EncMap are identical per generation. (component test now compares metadata vs PDB EncLog/EncMap for method update; PDB emission mirrors metadata Enc tables)
 
 ## Section 4 – Table-by-Table Delta Rules
-- [ ] Module: single row per generation; correct Generation/EncId/EncBaseId; Name/Mvid reused; Guid heap grows by one. Test multi-gen mdv output.
+- [x] Module: single row per generation; correct Generation/EncId/EncBaseId; Name/Mvid reused; Guid heap grows by one. Guid columns encoded as byte offsets (baseline GuidHeapStart + (index-1)*16), no sentinel in delta Guid heap. Gen2 BaseId = Gen1 EncId. Covered by `FSharpDeltaMetadataWriterTests.module rows chain enc ids...` (service HotReload filter).
 - [ ] TypeDef/NestedClass: added types update FieldList/MethodList ranges; NestedClass rows present for nested additions. mdv compares against Roslyn add-nested-type scenario.
 - [ ] TypeRef/MemberRef/AssemblyRef: reused when structurally identical; new rows only when needed. Add test that body-only edits do not grow these tables; new reference scenario grows exactly once.
 - [ ] MethodDef: updates emit MethodDef rows with new RVA; ParamList non-zero. Validate RVA matches delta IL offsets; Param reuse preserved.

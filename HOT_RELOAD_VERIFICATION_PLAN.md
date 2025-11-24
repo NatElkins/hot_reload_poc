@@ -32,7 +32,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 - [x] Confirm StandAloneSig tokens in headers match emitted StandAloneSig rows; locals edits create sig rows for updated methods and header tokens point at the emitted sig. Covered by component tests `emitDelta reuses StandAloneSig token when locals unchanged` and `emitDelta adds new StandAloneSig and header token when locals change` (delta currently re-emits the locals sig even when unchanged; header/token blob alignment verified).
 
 ## Section 6 – PDB / Debug Delta
-- [ ] PDB EncLog/EncMap identical to metadata EncLog/EncMap; add comparison test.
+- [x] PDB EncLog/EncMap identical to metadata EncLog/EncMap; add comparison test. Covered by component test `PDB EncLog/EncMap matches metadata Enc tables` (updates check equality across sorted rows).
 - [ ] Updated methods include MethodDebugInformation/sequence points; unchanged methods omitted. Assert documents stable unless new files introduced.
 - [ ] Heap starts in PDB delta reuse baseline lengths (string/blob/guid/doc name). Add targeted debug-reader checks.
 

@@ -29,7 +29,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 ## Section 5 – IL Delta Stream
 - [x] Validate fat/tiny headers and RVAs per method; EH sections well-formed; mdv /il+ matches MethodDef RVA. (Covered via component test `DeltaEmitterTests.IL delta fat header matches method body length`; RVA-to-body offset also covered by `MethodDef RVA matches emitted method body offset`.)
 - [x] Ensure IL tokens reuse baseline tokens for unchanged refs; new-reference growth deferred (needs MemberRef/TypeRef add scenario). Covered by component test `emitDelta reuses MemberRef tokens for unchanged external call`.
-- [ ] Confirm StandAloneSig tokens in headers match emitted StandAloneSig rows; locals edits create new sigs only when needed.
+- [x] Confirm StandAloneSig tokens in headers match emitted StandAloneSig rows; locals edits create sig rows for updated methods and header tokens point at the emitted sig. Covered by component tests `emitDelta reuses StandAloneSig token when locals unchanged` and `emitDelta adds new StandAloneSig and header token when locals change` (delta currently re-emits the locals sig even when unchanged; header/token blob alignment verified).
 
 ## Section 6 – PDB / Debug Delta
 - [ ] PDB EncLog/EncMap identical to metadata EncLog/EncMap; add comparison test.

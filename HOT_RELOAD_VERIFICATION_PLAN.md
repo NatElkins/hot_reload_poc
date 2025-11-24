@@ -27,7 +27,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 - [ ] ~~TypeSpec/GenericParam/Constraints: new instantiations add TypeSpec rows; generic param changes rejected (rude edit). Test new closed generic use; ensure no spurious growth on body-only edits.~~ (Deferred.)
 
 ## Section 5 – IL Delta Stream
-- [ ] Validate fat/tiny headers and RVAs per method; EH sections well-formed; mdv /il+ matches MethodDef RVA. (RVA-to-body offset validated via component test `DeltaEmitterTests.MethodDef RVA matches emitted method body offset`; remaining header/EH checks still open.)
+- [x] Validate fat/tiny headers and RVAs per method; EH sections well-formed; mdv /il+ matches MethodDef RVA. (Covered via component test `DeltaEmitterTests.IL delta fat header matches method body length`; RVA-to-body offset also covered by `MethodDef RVA matches emitted method body offset`.)
 - [ ] Ensure IL tokens reuse baseline tokens for unchanged refs; new tokens correspond to added rows (TypeSpec/MemberRef/etc.). Add token-reuse tests.
 - [ ] Confirm StandAloneSig tokens in headers match emitted StandAloneSig rows; locals edits create new sigs only when needed.
 

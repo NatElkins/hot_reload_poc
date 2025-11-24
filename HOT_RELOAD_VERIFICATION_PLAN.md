@@ -15,16 +15,16 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 
 ## Section 4 – Table-by-Table Delta Rules
 - [x] Module: single row per generation; correct Generation/EncId/EncBaseId; Name/Mvid reused; Guid heap grows by one. Guid columns encoded as byte offsets (baseline GuidHeapStart + (index-1)*16), no sentinel in delta Guid heap. Gen2 BaseId = Gen1 EncId. Covered by `FSharpDeltaMetadataWriterTests.module rows chain enc ids...` (service HotReload filter).
-- [ ] TypeDef/NestedClass: added types update FieldList/MethodList ranges; NestedClass rows present for nested additions. mdv compares against Roslyn add-nested-type scenario.
-- [ ] TypeRef/MemberRef/AssemblyRef: reused when structurally identical; new rows only when needed. Add test that body-only edits do not grow these tables; new reference scenario grows exactly once.
-- [ ] MethodDef: updates emit MethodDef rows with new RVA; ParamList non-zero. Validate RVA matches delta IL offsets; Param reuse preserved.
-- [ ] Param: Seq#0 return row always present; sequences strictly increasing; name handle reuse. Tests for parameterless updates and added params.
-- [ ] StandAloneSig: locals or calli edits add rows/blobs; reused when identical. Validate tokens in IL headers and EncLog/EncMap rows.
-- [ ] MethodSemantics/Property/Event/Maps: accessor adds wire MethodSemantics + Property/Event + Map rows; body-only accessor edits don’t add maps. Tests for property/event add/edit.
-- [ ] CustomAttribute: parent-sorted rows; new attributes appended after existing parent group; EncLog/EncMap include CA rows; value blobs correct. Include NullableContext/Async attributes scenarios.
-- [ ] MethodImpl: added interface/override implementations append rows with correct Class/MethodBody/MethodDecl tokens; EncLog/EncMap include. Test interface-impl add scenario.
-- [ ] Field/FieldRVA: appended Field rows (and FieldRVA when RVA present); validate TypeDef field range intact; RVA points into delta data.
-- [ ] TypeSpec/GenericParam/Constraints: new instantiations add TypeSpec rows; generic param changes rejected (rude edit). Test new closed generic use; ensure no spurious growth on body-only edits.
+- [ ] ~~TypeDef/NestedClass: added types update FieldList/MethodList ranges; NestedClass rows present for nested additions. mdv compares against Roslyn add-nested-type scenario.~~ (Deferred: not needed for method-body-only demo; emitter lacks TypeDef/NestedClass/Field plumbing.)
+- [ ] ~~TypeRef/MemberRef/AssemblyRef: reused when structurally identical; new rows only when needed. Add test that body-only edits do not grow these tables; new reference scenario grows exactly once.~~ (Deferred: baseline reuse suffices for method-body-only demo.)
+- [x] MethodDef: updates emit MethodDef rows with EncLog/EncMap entries (async multi-gen delta uses Default op). (RVA/ParamList spot-check deferred to Param item.) Verified via service test `method update emits MethodDef row with ParamList and RVA`.
+- [ ] Param: Seq#0 return row always present; sequences strictly increasing; name handle reuse. Tests for parameterless updates and added params. (Required for demo)
+- [ ] StandAloneSig: locals or calli edits add rows/blobs; reused when identical. Validate tokens in IL headers and EncLog/EncMap rows. (Required if method body contains locals; include for demo safety)
+- [ ] ~~MethodSemantics/Property/Event/Maps: accessor adds wire MethodSemantics + Property/Event + Map rows; body-only accessor edits don’t add maps. Tests for property/event add/edit.~~ (Deferred: not needed for simple method body edit demo.)
+- [ ] ~~CustomAttribute: parent-sorted rows; new attributes appended after existing parent group; EncLog/EncMap include CA rows; value blobs correct. Include NullableContext/Async attributes scenarios.~~ (Deferred: no CA changes for body-only demo.)
+- [ ] ~~MethodImpl: added interface/override implementations append rows with correct Class/MethodBody/MethodDecl tokens; EncLog/EncMap include. Test interface-impl add scenario.~~ (Deferred: not needed for body edit.)
+- [ ] ~~Field/FieldRVA: appended Field rows (and FieldRVA when RVA present); validate TypeDef field range intact; RVA points into delta data.~~ (Deferred.)
+- [ ] ~~TypeSpec/GenericParam/Constraints: new instantiations add TypeSpec rows; generic param changes rejected (rude edit). Test new closed generic use; ensure no spurious growth on body-only edits.~~ (Deferred.)
 
 ## Section 5 – IL Delta Stream
 - [ ] Validate fat/tiny headers and RVAs per method; EH sections well-formed; mdv /il+ matches MethodDef RVA.

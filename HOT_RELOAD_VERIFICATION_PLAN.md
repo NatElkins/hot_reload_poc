@@ -34,7 +34,7 @@ Goal: for each spec section (2–8), define actionable checks to prove the F# im
 ## Section 6 – PDB / Debug Delta
 - [x] PDB EncLog/EncMap identical to metadata EncLog/EncMap; add comparison test. Covered by component test `PDB EncLog/EncMap matches metadata Enc tables` (updates check equality across sorted rows).
 - [x] Updated methods include MethodDebugInformation/sequence points; unchanged methods omitted. Assert documents stable unless new files introduced. Covered by component test `PDB delta includes only updated methods and stable documents` (two-method baseline, single-method edit).
-- [ ] Heap starts in PDB delta reuse baseline lengths (string/blob/guid/doc name). Add targeted debug-reader checks.
+- [x] Heap starts in PDB delta reuse baseline lengths (string/blob/guid/doc name). Covered by component test `PDB heap offsets start at baseline sizes` (logs/guards when no doc/seqpoint blobs emitted).
 
 ## Section 7 – Runtime Apply Pipeline
 - [ ] End-to-end ApplyUpdate succeeds for supported edits (body-only, property/event add, interface impl, locals change) using demo/runtime smoke with mdv inspection of deltas.

@@ -8,6 +8,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status 2026-02-07 (single-command verifier script)**: Added `tests/scripts/hot-reload-verify.sh` to run the entire gate in one command (build + HotReload service/component filters + smoke default + smoke runtime apply + direct scripted runtime apply trace assertions). This is now the preferred repeatable local verification path when validating branch status end-to-end.
 - **Status 2026-02-07 (deep review reprioritization)**: Cross-repo review (`fsharp` + `roslyn` + `sdk`) identified immediate integration blockers not fully captured by older milestones: missing F# `SupportsHotReload` capability wiring in SDK targets, Roslyn-centric `dotnet-watch` managed update flow, duplicated F# session/baseline state ownership, and incomplete commit/discard semantics. Milestone 0 below is now the highest-priority execution track before broadening feature scope.
 - **Status 2026-02-07 (Milestone 0 closure)**: Completed Tasks 0.1-0.5 as separate commits (`63d4fcc32`, `a8a7e58d4`, `54871557ab`, `01196e0834`, `ae9b3ba0f`) with Roslyn-parity rationale noted per task. Final closure run of `cd fsharp && ./tests/scripts/hot-reload-verify.sh` succeeded (service HotReload filter `259` passed, component HotReload filter `107` passed, smoke/default + smoke/runtime-apply + direct traced runtime-apply all green).
+- **Status 2026-02-07 (Milestone 0 follow-up hardening)**: Completed post-closure Task 0.4/0.5 fixes in separate commits (`ac239b8e11`, `6662b3c68`). `dotnet-watch` now forces a compile pass when F# design-time command lines omit `FscCommandLineArgs`, normalizes quoted compiler paths, notifies FCS about changed source files before emit, and compiles before emit to satisfy stale-output guards. The F# checker now accepts inline short output switches (`-o:<path>`) in hot-reload sessions, closing the `MissingOutputPath` gap seen from watch-driven command lines.
 
 ## Milestone 0 - Integration Hardening and Host Alignment (2026-02-07)
 
@@ -50,7 +51,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Existing C#/VB behavior remains unchanged.
 
 ### Task 0.4 - dotnet-watch F# Managed Update Path
-- **Status**: Completed (2026-02-07). `dotnet-watch` now tracks F# projects in the managed update loop, aggregates Roslyn + F# managed updates before apply, preserves Roslyn-style commit/discard semantics, and reports managed-code no-change messaging in mixed-language sessions. Added an F# bridge service that attempts checker-driven delta emission when compatible FCS APIs are present and deterministically falls back to restart/rebuild semantics when unavailable.
+- **Status**: Completed (2026-02-07, hardened same day). `dotnet-watch` now tracks F# projects in the managed update loop, aggregates Roslyn + F# managed updates before apply, preserves Roslyn-style commit/discard semantics, and reports managed-code no-change messaging in mixed-language sessions. Added an F# bridge service that attempts checker-driven delta emission when compatible FCS APIs are present and deterministically falls back to restart/rebuild semantics when unavailable. Follow-up hardening (`ac239b8e11`) aligned behavior with real watch-loop command lines by (a) skipping Roslyn managed-update routing for F# projects, (b) forcing a compile capture fallback when `FscCommandLineArgs` are empty, (c) normalizing quoted `FscToolPath` values, (d) notifying changed files through FCS before emit, and (e) forcing compile-before-emit to satisfy stale-output checks.
 - **Scope**: Move F# from diagnostics-only participation to active managed-code update support in watch loops.
 - **Files/Modules**: `sdk/src/BuiltInTools/dotnet-watch/HotReload/*` (especially `CompilationHandler.cs`, `HotReloadDotNetWatcher.cs`, `IncrementalMSBuildWorkspace.cs`) and F# bridge surface as needed.
 - **Objective**:
@@ -62,7 +63,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Restart/rebuild fallback still works for unsupported edits.
 
 ### Task 0.5 - Commit Strategy and Validation Discipline
-- **Status**: Completed (2026-02-07). Landed each Milestone 0 task as a separate commit, added the in-repo single-command verifier script (`fsharp/tests/scripts/hot-reload-verify.sh`), ran the required per-commit `fsharp` build/component gates after each task commit, and finished with a full verify-script pass before milestone handoff.
+- **Status**: Completed (2026-02-07). Landed each Milestone 0 task as a separate commit, added the in-repo single-command verifier script (`fsharp/tests/scripts/hot-reload-verify.sh`), ran the required per-commit `fsharp` build/component gates after each task commit, and finished with a full verify-script pass before milestone handoff. Follow-up hardening also remained task-scoped and separately committed (`ac239b8e11` in `sdk`, `6662b3c68` in `fsharp`) with the same per-commit build/component gate reruns.
 - **Scope**: Keep risk low while spanning `fsharp` and `sdk` repos.
 - **Execution Rules**:
   1. Land each task as separate, reviewable commits.

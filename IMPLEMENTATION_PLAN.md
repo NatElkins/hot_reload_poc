@@ -11,6 +11,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status 2026-02-07 (Milestone 0 follow-up hardening)**: Completed post-closure Task 0.4/0.5 fixes in separate commits (`ac239b8e11`, `6662b3c68`). `dotnet-watch` now forces a compile pass when F# design-time command lines omit `FscCommandLineArgs`, normalizes quoted compiler paths, notifies FCS about changed source files before emit, and compiles before emit to satisfy stale-output guards. The F# checker now accepts inline short output switches (`-o:<path>`) in hot-reload sessions, closing the `MissingOutputPath` gap seen from watch-driven command lines.
 - **Status 2026-02-07 (Milestone 0 final verification rerun)**: Re-ran `cd fsharp && ./tests/scripts/hot-reload-verify.sh` after follow-up hardening; stages remained green with updated service count (`260` passed) and component count (`107` passed), including smoke/default, smoke/runtime-apply, and direct traced runtime-apply.
 - **Status 2026-02-07 (dotnet-watch F# test gate hardening)**: Added SDK regression coverage in `sdk/test/dotnet-watch.Tests/HotReload/ApplyDeltaTests.cs` (`68de339706`) to validate F# watch-loop edit application and rude-edit restart semantics with Roslyn-compatible restart behavior. Assertions now explicitly accept both managed apply and bridge-unavailable restart fallback (`FSharpChecker.StartHotReloadSession` missing) while still requiring restart markers for rude edits. Validated via `cd sdk && ./.dotnet/dotnet test test/dotnet-watch.Tests/dotnet-watch.Tests.csproj -c Debug --filter FullyQualifiedName~FSharp -- -dotnetPath .../artifacts/bin/redist/Debug/dotnet/dotnet`, then reran required `fsharp` gates (`build` succeeded, HotReload component filter `107` passed).
+- **Status 2026-02-07 (workspace snapshot bridge in compiler + SDK)**: Added snapshot-based hot reload checker overloads in `fsharp` (`04e92d03a`) and taught `dotnet-watch` to prefer an `FSharpWorkspace` snapshot bridge when those APIs are available (`sdk` commit `4947ff9558`), with automatic fallback to the existing project-options reflection path. Validation: `dotnet-watch` F# filter (`4` passed), plus required `fsharp` build/component HotReload gates after each commit.
 
 ## Milestone 0 - Integration Hardening and Host Alignment (2026-02-07)
 
@@ -540,6 +541,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - API flagged as preview (requires `--langversion:preview`).
 - **Context**: Roslyn `ManagedHotReloadLanguageService`.
 - **Status**: In progress (updated 2025-11-02). Preview APIs (`StartHotReloadSession`, `EmitHotReloadDelta`, `EndHotReloadSession`, `HotReloadSessionActive`, `HotReloadCapabilities`) now drive the edit-and-continue service end-to-end. Metadata/IL/PDB deltas are emitted by default, multi-delta sessions run through the scripted demo, and the checker surfaces capability flags so hosts can negotiate supported features. Runtime apply remains behind the `FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY` feature flag while we stabilise the delta payloads. Checker and component hot reload suites continue to pass (`./.dotnet/dotnet test ...HotReload`).
+- **Status 2026-02-07**: Added `FSharpProjectSnapshot` overloads for `StartHotReloadSession`/`EmitHotReloadDelta` so workspace-driven hosts can use immutable snapshots without re-materializing command-line options. Service regression coverage now includes snapshot-based session start + delta emission.
 - [x] (1) Validate runtime `MetadataUpdater.ApplyUpdate` end-to-end ✅ **DONE (2025-12)**. Component test `ApplyUpdate succeeds for method body edit` validates this.
 - [ ] (2) **TODO**: Surface richer diagnostics/telemetry (delta sizes, rude-edit propagation) to IDE hosts before exiting preview.
 - [ ] (3) **TODO**: Retire the `FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY` feature flag, refine capability negotiation, and document the supported scenarios.
@@ -591,7 +593,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Context**: Roslyn watch integration tests; `dotnet watch` documentation.
 - **Status**: Completed (2025-11-01). Added `hot_reload_poc/scripts/run-hot-reload-watch.sh`, a portable helper that sets the required environment (`DOTNET_MODIFIABLE_ASSEMBLIES=debug`) and launches `dotnet watch --hot-reload` against the F# sample. Serves as the reference entry point for demos/manual validation using the existing TestApp project.
 - [ ] **TODO**: Automate the watch flow in CI (capture console markers or reflection checks) once runtime apply is stable.
-- [ ] **TODO (blocked on SDK)**: Land SDK-side `dotnet watch` integration that calls `FSharpChecker` hot reload services directly.
+- [x] **DONE (2026-02-07)**: SDK-side `dotnet watch` now uses an `FSharpWorkspace` snapshot bridge when available and otherwise falls back to project-options reflection. This keeps Roslyn-style host commit/discard semantics while letting F# consume workspace snapshots directly.
 - [ ] **FUTURE**: Evolve the compiler toward an `FSharpWorkspace`/`FSharpProject` abstraction—mirroring Roslyn workspaces as sketched in [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976).
 
 **dotnet watch roadmap snapshot (2025-11-02)**
@@ -647,7 +649,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Prototype conversion from project graph to workspace snapshot with cached typed trees.
   - Migration strategy documented for `FSharpChecker` consumers.
 - **Context**: Roadmap derived from [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976).
-- **Status**: Planned (2025-11-02). Execution staged for 2026 milestones; see roadmap note for timeline.
+- **Status**: In progress (2026-02-07). `FSharpWorkspace` prototype APIs already exist in `src/Compiler/Service/FSharpWorkspace*.fs`, and the SDK bridge now consumes workspace snapshots for hot reload when available. Remaining work is the long-term immutable solution model/API consolidation captured in `notes/fsharp_workspace_roadmap.md`.
 - [ ] **FUTURE (2026+)**: Subsequent tasks will cover analyzer hosting, IDE integration, and GA criteria.
 
 ---

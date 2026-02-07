@@ -3,12 +3,80 @@
 This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. Each task is scoped so that a single LLM-focused iteration can complete it while keeping the repository in a buildable, backwards-compatible state. After every task, run the full build (`dotnet build FSharp.sln` or `build.cmd`) and applicable test suites. Complete outstanding work in earlier milestones before tackling later items—e.g., finish the Task 2.x synthesized-name/metadata plumbing prior to expanding tooling scenarios in Milestone 3.
 
 - Testing guidance: the full component suite is time-consuming (10+ minutes). For day-to-day iteration run `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload` and reserve the full suite for validation runs.
+- **Status 2026-02-07 (doc + verification sync)**: Active delivery remains `NatElkins/fsharp#1` on `hot-reload@c454aeb`; when PR text and branch behavior diverge, prefer branch commits + this plan. Local revalidation today: `./.dotnet/dotnet build FSharp.sln -c Debug -v minimal`, service HotReload filter (`258` passed), and component HotReload filter (`101` passed) all succeeded.
+- **Status 2026-02-07 (runtime-apply smoke + direct scripted validation)**: Added a full non-interactive runtime check on top of the test filters. `tests/scripts/hot-reload-demo-smoke.sh` now re-verified in both default mode and `HOTRELOAD_SMOKE_RUNTIME_APPLY=1`; runtime mode reports successful live updates (`Hot reload applied (delta #1/#2)`) and the expected `Hello from generation 0 -> 1 -> 2` transitions. A direct run of `./.dotnet/dotnet run --project tests/projects/HotReloadDemo/HotReloadDemoApp/HotReloadDemoApp.fsproj -- --scripted --multi-delta --runtime-apply` reproduces the same behavior, and a traced run (`FSHARP_HOTRELOAD_TRACE_RUNTIME_APPLY=1`) logs explicit `[hotreload-runtime] applying delta ...` events for both generations.
+- **Status 2026-02-07 (single-command verifier script)**: Added `tests/scripts/hot-reload-verify.sh` to run the entire gate in one command (build + HotReload service/component filters + smoke default + smoke runtime apply + direct scripted runtime apply trace assertions). This is now the preferred repeatable local verification path when validating branch status end-to-end.
+- **Status 2026-02-07 (deep review reprioritization)**: Cross-repo review (`fsharp` + `roslyn` + `sdk`) identified immediate integration blockers not fully captured by older milestones: missing F# `SupportsHotReload` capability wiring in SDK targets, Roslyn-centric `dotnet-watch` managed update flow, duplicated F# session/baseline state ownership, and incomplete commit/discard semantics. Milestone 0 below is now the highest-priority execution track before broadening feature scope.
+- **Status 2026-02-07 (Milestone 0 closure)**: Completed Tasks 0.1-0.5 as separate commits (`63d4fcc32`, `a8a7e58d4`, `54871557ab`, `01196e0834`, `ae9b3ba0f`) with Roslyn-parity rationale noted per task. Final closure run of `cd fsharp && ./tests/scripts/hot-reload-verify.sh` succeeded (service HotReload filter `259` passed, component HotReload filter `107` passed, smoke/default + smoke/runtime-apply + direct traced runtime-apply all green).
+
+## Milestone 0 - Integration Hardening and Host Alignment (2026-02-07)
+
+### Task 0.1 - Session Semantics Hardening
+- **Status**: Completed (2026-02-07). Pending/committed update semantics now mirror Roslyn's commit/discard model: `HotReloadState` stages pending baselines and only advances generation on explicit commit, `DiscardPendingUpdate` clears staged state, checker/session flows reject stale output fingerprints instead of silently proceeding, and metadata/PDB tracing is fully env-gated. `IMetadataHeaps.GetUserStringHeapIdx` now writes #US offsets instead of routing through #Strings. Coverage added in component/service suites (`DeltaEmitterTests`, `HotReloadCheckerTests`) for commit/discard and stale-output rejection.
+- **Scope**: Make F# session semantics match Roslyn's pending/committed update model.
+- **Files/Modules**: `src/Compiler/HotReload/EditAndContinueLanguageService.fs`, `src/Compiler/HotReload/HotReloadState.fs`, `src/Compiler/Service/service.fs`, `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs`, `src/Compiler/CodeGen/HotReloadPdb.fs`, `src/Compiler/CodeGen/DeltaMetadataTables.fs`.
+- **Objective**:
+  1. Implement real discard behavior (not no-op) and verify commit/discard transitions.
+  2. Harden stale-baseline detection in checker flows so timeout paths cannot silently continue with stale output.
+  3. Remove unconditional console logging in metadata/PDB emitters; keep tracing behind explicit env flags.
+  4. Fix `IMetadataHeaps.GetUserStringHeapIdx` behavior in delta tables so #US routing is correct.
+- **Acceptance Criteria**:
+  - New/updated tests cover commit/discard/retry and stale-output detection.
+  - No unconditional `printfn` output from hot reload emit paths in default runs.
+  - `./tests/scripts/hot-reload-verify.sh` passes.
+
+### Task 0.2 - Baseline and Session Deduplication
+- **Status**: Completed (2026-02-07). Baseline creation now uses a shared `HotReloadBaseline.createFromEmittedArtifacts` helper in both checker/service and `fsc` hot-reload capture paths, eliminating duplicated module-id/heap/token-handle wiring. Session restoration state was collapsed to `HotReloadState` (single source): committed snapshots are restorable via `TryRestoreSession`, while `ResetSessionState` clears both active and persisted state during explicit session teardown.
+- **Scope**: Eliminate duplicated baseline/session ownership between CLI and checker/service paths.
+- **Files/Modules**: `src/Compiler/Driver/fsc.fs`, `src/Compiler/Service/service.fs`, `src/Compiler/CodeGen/HotReloadBaseline.fs`, `src/Compiler/HotReload/EditAndContinueLanguageService.fs`.
+- **Objective**:
+  1. Introduce a single baseline-construction helper/factory used by both `fsc` and checker APIs.
+  2. Collapse duplicated state stores (`lastBaselineState`, `currentBaselineState`) into one source of truth.
+  3. Preserve existing multi-generation chaining behavior.
+- **Acceptance Criteria**:
+  - Equivalent baseline metadata/token capture in both entry paths.
+  - Reduced duplicate logic and lock/state restoration complexity.
+  - HotReload service/component tests remain green.
+
+### Task 0.3 - SDK Capability Wiring for F#
+- **Status**: Completed (2026-02-07). Added `ProjectCapability Include="SupportsHotReload"` to `Microsoft.NET.Sdk.FSharp.targets` using the same gating conditions as C#/VB (`.NETCoreApp`, TFM >= 6.0, `SupportsHotReload != false`) and extended SDK tests (`GivenThatWeWantToBuildALibraryWithFSharp`) to cover enabled, pre-net6, and explicit-opt-out flows.
+- **Scope**: Unblock host capability negotiation for F# projects.
+- **Files/Modules**: `sdk/src/Tasks/Microsoft.NET.Build.Tasks/targets/Microsoft.NET.Sdk.FSharp.targets` and SDK tests as needed.
+- **Objective**:
+  1. Add `ProjectCapability Include=\"SupportsHotReload\"` for F# with parity conditions used by C#/VB (`.NETCoreApp`, TFM >= 6.0, `SupportsHotReload != false`).
+  2. Add/extend SDK tests to verify expected capability behavior.
+- **Acceptance Criteria**:
+  - F# projects advertise `SupportsHotReload` under expected conditions.
+  - Existing C#/VB behavior remains unchanged.
+
+### Task 0.4 - dotnet-watch F# Managed Update Path
+- **Status**: Completed (2026-02-07). `dotnet-watch` now tracks F# projects in the managed update loop, aggregates Roslyn + F# managed updates before apply, preserves Roslyn-style commit/discard semantics, and reports managed-code no-change messaging in mixed-language sessions. Added an F# bridge service that attempts checker-driven delta emission when compatible FCS APIs are present and deterministically falls back to restart/rebuild semantics when unavailable.
+- **Scope**: Move F# from diagnostics-only participation to active managed-code update support in watch loops.
+- **Files/Modules**: `sdk/src/BuiltInTools/dotnet-watch/HotReload/*` (especially `CompilationHandler.cs`, `HotReloadDotNetWatcher.cs`, `IncrementalMSBuildWorkspace.cs`) and F# bridge surface as needed.
+- **Objective**:
+  1. Ensure F# projects can participate in managed updates when capability/runtime constraints are satisfied.
+  2. Keep commit/discard behavior symmetric with existing watch semantics.
+  3. Update user-facing messaging so F# is not framed as C#-only in mixed-language flows.
+- **Acceptance Criteria**:
+  - End-to-end `dotnet watch --hot-reload` applies managed updates for at least one F# sample project.
+  - Restart/rebuild fallback still works for unsupported edits.
+
+### Task 0.5 - Commit Strategy and Validation Discipline
+- **Status**: Completed (2026-02-07). Landed each Milestone 0 task as a separate commit, added the in-repo single-command verifier script (`fsharp/tests/scripts/hot-reload-verify.sh`), ran the required per-commit `fsharp` build/component gates after each task commit, and finished with a full verify-script pass before milestone handoff.
+- **Scope**: Keep risk low while spanning `fsharp` and `sdk` repos.
+- **Execution Rules**:
+  1. Land each task as separate, reviewable commits.
+  2. Include Roslyn parity rationale in commit messages when behavior mirrors Roslyn.
+  3. After each commit, run at minimum:
+     - `cd fsharp && ./.dotnet/dotnet build FSharp.sln -c Debug -v minimal`
+     - `cd fsharp && ./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal`
+  4. Before closing Milestone 0, run `cd fsharp && ./tests/scripts/hot-reload-verify.sh`.
 
 ## Milestone 1 – Baseline Capture & Semantic Diff Infrastructure
 
 ### Task 1.1 – TypedTreeDiff Core
 - **Status**: Completed (2025-10-31). Added `TypedTreeDiff.fs`/`.fsi` with semantic/rude edit tracking and exercised the diff via `TypedTreeDiffResult`; service tests in `tests/FSharp.Compiler.Service.Tests/HotReload/TypedTreeDiffTests.fs` cover unchanged files, method-body updates, inline toggles, and union layout changes. Validated with `./.dotnet/dotnet build FSharp.sln -c Debug` and `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`.
-- [ ] Wire the diff output into the session orchestration (DefinitionMap/SymbolChanges and forthcoming IDE adapters).
+- [x] Wire the diff output into the session orchestration (DefinitionMap/SymbolChanges and forthcoming IDE adapters). **DONE (2025-12)**: `DeltaBuilder.fs` computes symbol changes from typed-tree diffs, and `EditAndContinueLanguageService.fs` orchestrates sessions with `StartSession`/`EmitDelta`/`EndSession`.
 
 - **Scope**: Implement the `TypedTreeDiff` data structures and algorithms.
 - **Files/Modules**: `src/Compiler/TypedTree/TypedTreeDiff.fs` (new), with signatures in `TypedTreeDiff.fsi`; updates to `TypedTree`/`TypedTreeOps` as needed.
@@ -21,7 +89,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 
 ### Task 1.2 – HotReloadNameMap & Generators
 - **Status**: Completed (2025-11-01). Compiler now provisions `HotReloadNameMap` whenever `--enable:hotreloaddeltas` is active: `main4` seeds the map before IL generation, baseline capture resets it prior to subsequent deltas, and sessions clear the map on teardown. Component coverage in `tests/FSharp.Compiler.ComponentTests/HotReload/NameMapTests.fs` exercises closures, async workflows, computation expressions, task builders, and record/union helpers to confirm `@hotreload` naming without line-number suffixes. CLI and checker entry points reuse the map across generations so metadata tokens stay stable.
-- [ ] Continue auditing new synthesized constructs (e.g., resumable state machines, active patterns) whenever we light up additional generators, and ensure CLI/IDE orchestrators request map snapshots when persisting baselines.
+- [ ] **ONGOING**: Continue auditing new synthesized constructs (e.g., resumable state machines, active patterns) whenever additional generators are enabled. Current coverage includes closures, async workflows, task builders, and computation expressions via `NameMapTests.fs`.
 
 - **Scope**: Introduce stabilized name mapping and session-aware name generators.
 - **Files/Modules**: `src/Compiler/TypedTree/CompilerGlobalState.fs`, `src/Compiler/CodeGen/IlxGen.fs`, new helper `HotReloadNameMap.fs`.
@@ -40,7 +108,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Build unaffected when hot reload disabled.
 - **Context**: `src/Compiler/AbstractIL/ilwrite.fs` and Roslyn `EmitBaseline.cs`.
 - **Status**: Completed (2025-10-30). Baseline capture module and component tests implemented; metadata snapshot plumbed via IL writer helpers.
-- [ ] Extend baseline capture to persist EncLog/EncMap rows alongside `MetadataSnapshot` once delta emission work begins.
+- [x] Extend baseline capture to persist EncLog/EncMap rows alongside `MetadataSnapshot` once delta emission work begins. **DONE**: EncLog/EncMap generation is handled by `FSharpDeltaMetadataWriter.fs` and `DeltaMetadataTables.fs`; cumulative state flows through `FSharpEmitBaseline.applyDelta`.
 
 ### Task 1.4 – IlxGenEnv Snapshotting
 - **Scope**: Persist minimal `IlxGenEnv` required for delta emission.
@@ -54,7 +122,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 
 ### Task 1.5 – HotReloadNameMap Coverage Audit
 - **Status**: Completed (2025-11-01). `NiceNameGenerator` now consults `HotReloadNameMap` when hot reload is enabled, ensuring closures, async state machines, computation expressions, and record/union helpers reuse stable compiler-generated names. Component coverage lives in `tests/FSharp.Compiler.ComponentTests/HotReload/NameMapTests.fs`, which exercises all four scenarios under `--enable:hotreloaddeltas` and enforces the absence of line-number suffixes.
-- [ ] Keep the test matrix in sync with future synthesized constructs (e.g., task builders) so new helpers receive map coverage.
+- [ ] **ONGOING**: Keep the test matrix in sync with future synthesized constructs. Task builders are now covered in `NameMapTests.fs`.
 
 - **Scope**: Audit every `NiceNameGenerator`/`StableNiceNameGenerator` call site and ensure hot reload sessions reuse stable names.
 - **Files/Modules**: `IlxGen.fs`, `EraseClosures.fs`, `AsyncBuilder.fs`, `ComputationExpressions/*`, other modules emitting synthesized names.
@@ -85,9 +153,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - ✅ **Drive multi-generation CLI flow** (2025-10-31): `HotReloadTest` re-used the same generator across sequential edits, emitted generation-numbered delta artifacts, and reran mdv before each `MetadataUpdater.ApplyUpdate`. Validation at the time: `dotnet build hot_reload_poc/HotReloadPoc.sln -c Debug`. **Note (2025-11-02)**: this harness has temporarily regressed while Task 3.5 rewrites the sample to use `FSharpChecker`; restoring equivalent coverage via the new pipeline is required.
   - ✅ **Persist compiler session state** (2025-10-31): `HotReloadState` now tracks the captured baseline, current generation, and previous EncId; `IlxDeltaEmitter` consumes the session data to wire EncBaseId/EncId chaining and `DeltaEmitterTests` assert back-to-back deltas. Tests: `./.dotnet/dotnet build FSharp.sln -c Debug`.
   - ✅ **Broaden test coverage** (2025-11-01): Added multi-method IL delta validation (`emitDelta updates multiple methods`) and expanded HotReload NameMap component tests to cover closures, async workflows, task builders, computation expressions, and record/union helpers. Tests: `dotnet build FSharp.sln -c Debug`; `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --filter FullyQualifiedName~HotReload`.
-- [ ] Integrate variable slot allocator/local mapping before enabling edits that rewrite locals (closures/async) and ensure synthesized member mapping (Task 2.5 follow-up) continues to project tokens correctly.
+- [ ] **TODO (P2)**: Integrate variable slot allocator/local mapping before enabling edits that rewrite locals (closures/async). This mirrors Roslyn's `VariableSlotAllocator` for preserving debugging experience during edits modifying local variables.
 - [x] (2025-11-02): `IlxDeltaEmitter` now normalises generated field names, reuses baseline tokens for stable backing fields, and raises `HotReloadUnsupportedEditException` when a truly new field is introduced so tooling surfaces an explicit unsupported-edit diagnostic.
-- [ ] Keep delta output validation wired to `HotReloadNameMap` stability for any newly supported generator, and extend tests to cover async state machines, resumable computation expressions, and multi-delta sessions once symbol matcher enhancements land.
+- [ ] **ONGOING**: Keep delta output validation wired to `HotReloadNameMap` stability for any newly supported generator. Async state machines and multi-delta sessions are now covered in tests.
 
 ### Task 2.2 – Rude Edit Classification
 - **Scope**: Extend `TypedTreeDiff` to label unsupported edits.
@@ -98,7 +166,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Diagnostics integrate with existing compiler error reporting (no global behavior change until flag enabled).
 - **Context**: Roslyn `RudeEditDiagnosticTests`.
 - **Status**: Completed (2025-11-01). `TypedTreeDiff` now classifies signature/inline/type-layout/added/removed edits, `RudeEditDiagnostics.fs` maps each rude edit to stable IDs and messages, and service-layer tests (`RudeEditDiagnosticsTests.fs`, `TypedTreeDiffTests.fs`) assert the diagnostics. Validation: `./.dotnet/dotnet build FSharp.sln -c Debug`; `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload`.
-- [ ] Plumb diagnostics into `FSharpEditAndContinueLanguageService` responses and CLI tooling (Task 3.1/Task 3.4). Track additional rude-edit scenarios (type providers, active patterns) for future expansion.
+- [ ] **TODO**: Plumb diagnostics into CLI tooling (e.g., `dotnet watch`). `RudeEditDiagnostics.fs` exists with FSHRDL001-FSHRDL099 diagnostic IDs. Track type providers and active patterns for future expansion.
 
 ### Task 2.3 – Metadata & PDB Delta Writers
 - **Scope**: Mirror Roslyn’s `DeltaMetadataWriter`/`EmitBaseline` pipeline so the F# compiler records table/heap deltas, EncLog/EncMap entries, and portable PDB slices without re-emitting full assemblies.
@@ -303,9 +371,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
      - *Update 2025-11-08 (pm)*: Added `createModuleWithParameterizedMethod` + `emitDelta adds parameter metadata rows for new method`, which verifies we emit `AddParameter` EncLog entries (and tokens) when a newly added method introduces parameters. This proves the Parameter definition index + metadata writer path can hydrate the row payload from the updated assembly before we tackle property/event rows.
      - *Update 2025-11-08 (late pm)*: Introduced a `createPropertyHostBaselineModule` helper plus a new regression (`emitDelta adds property metadata rows for new property`). `IlxDeltaEmitter` now tracks `addedPropertyTokens`, wires them through the property definition index, registers accessor metadata even when the method is new, updates the baseline’s `PropertyTokens`, and emits the corresponding Property/PropertyMap rows so the mdv dump shows the expected `AddProperty` operation.
     - *Update 2025-11-10*: Attempted to lift the row-info records (`MethodDefinitionRowInfo`, `ParameterDefinitionRowInfo`, etc.) into a shared `DeltaMetadataTypes.fs` module so the emitter, metadata tables, and writer all reference the same definitions. The build immediately failed because `DeltaMetadataTables.fs` still exposes its nested `TableRows` record directly via AbstractIL types (`UnsharedRow`), which .NET 9 no longer accepts outside the module. Open checklist:
-        - [ ] Refactor `DeltaMetadataTables.fs` to emit a Roslyn-style `RowElementData` snapshot (each row expressed as tag/value pairs) while keeping AbstractIL details private.
-        - [ ] Add `DeltaMetadataTypes.fs` with the shared row-info definitions and update `FSharpDeltaMetadataWriter`, `IlxDeltaEmitter`, and the metadata writer tests to consume them.
-        - [ ] Re-run `FSharpDeltaMetadataWriterTests`/metadata-writer suites and commit once the above compiles.
+        - [x] Refactor `DeltaMetadataTables.fs` to emit a Roslyn-style `RowElementData` snapshot (each row expressed as tag/value pairs) while keeping AbstractIL details private. **DONE**: `DeltaMetadataTables.fs` (746 lines) uses internal row builders.
+        - [x] Add `DeltaMetadataTypes.fs` with the shared row-info definitions and update `FSharpDeltaMetadataWriter`, `IlxDeltaEmitter`, and the metadata writer tests to consume them. **DONE**: `DeltaMetadataTypes.fs` (129 lines) defines all shared row-info types.
+        - [x] Re-run `FSharpDeltaMetadataWriterTests`/metadata-writer suites and commit once the above compiles. **DONE**: Tests pass.
      - *Update 2025-11-10*: Tried extracting the row-info records (`MethodDefinitionRowInfo`, `ParameterDefinitionRowInfo`, etc.) into a new module so `IlxDeltaEmitter`, `DeltaMetadataTables`, and `FSharpDeltaMetadataWriter` could share them. The compilation order/preamble checks (nested `TableRows` type + AbstractIL helpers) caused the build to fail, so the experiment was rolled back. We still need a safe way to hoist the row-info types without touching the existing AbstractIL table mirrors.
      - *Update 2025-11-09*: Mirrored the same flow for events. Added `createEventHostBaselineModule` and `emitDelta adds event metadata rows for new event`, plumbed `addedEventTokens`/`EventMap` rows through the emitter/baseline, and verified EncLog now records `AddEvent` + `AddEventMap` when an event (and its add/remove accessors) is introduced mid-session.
      - *Update 2025-11-09 (pm)*: MethodSemantics rows now light up for newly added property/event accessors. `IlxDeltaEmitter` resolves tokens for methods introduced in the current delta, emits MethodSemantics entries, and the new component asserts `AddMethod` operations appear in EncLog for both property and event additions.
@@ -419,7 +487,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
      - **Status 2025-11-12 (late night +4)**: Generated Roslyn deltas via `hotreload-utils`/`csharp_delta_test` and compared them to the F# demo deltas. The C# metadata heaps stay tiny (e.g., `#Strings` = 0x3d bytes, `#US` = 4 bytes, EncLog includes AssemblyRef + TypeRef rows), whereas the F# delta still dumps a ~0x3B0-byte string heap full of empty entries and only logs Module/Method updates. This confirms we’re over-emitting baseline strings and probably confusing the CLR before the aggregator runs. Next up: shrink our heap emission to only the rows/handles touched by the delta and make sure we log the same EncLog rows Roslyn does.
       - **Status 2025-11-12 (night +5)**: Updated `FSharpMetadataAggregator.TranslateStringHandle` to fall back to baseline handles by looking up the literal value in the baseline metadata (method/property/event/type names). This keeps existing tests passing even if the delta re-encodes names at new offsets, which unblocks the next iteration where we remap handles without cloning the entire baseline string blob.
   9. **Status (2025-11-05)** – Roslyn parity work in progress. mdv component tests remain red because the new writer is not implemented; keep this item open until the new infrastructure ships.
-- [ ] Once the metadata writer lands, audit `IlxDeltaEmitter` callers (CLI, checker API) to consume the richer baseline state and remove legacy `MetadataBuilder` fallbacks.
+- [x] Once the metadata writer lands, audit `IlxDeltaEmitter` callers (CLI, checker API) to consume the richer baseline state and remove legacy `MetadataBuilder` fallbacks. **DONE (2025-12)**: The metadata writer (`FSharpDeltaMetadataWriter.fs`) has landed, `IlxDeltaEmitter.fs` (2,254 lines) is mature, and MetadataBuilder fallbacks have been removed.
 - **Micro-plan for metadata-row refactor (2025-11-11)**:
   1. 🟢 **Done** – Introduce `DeltaMetadataTypes.fs` with only `RowElementData` so the project knows about the shared module but no behaviour changes occur.
   2. 🟢 **Done (2025-11-11)** – Move one record at a time from `FSharpDeltaMetadataWriter.fs` into `DeltaMetadataTypes.fs`, updating each dependent file (`DeltaMetadataTables.fs`, `IlxDeltaEmitter.fs`, tests) and re-running `dotnet test ...FSharpDeltaMetadataWriterTests` after every move. Method, parameter, property, event, property-map, event-map, and MethodSemantics rows now live in the shared module.
@@ -444,7 +512,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Whole build remains backward compatible.
 - **Context**: `HotReloadTest.fs` prototype, Roslyn `WatchHotReloadService`.
 - **Status**: Completed (2025-11-01). `FSharpEditAndContinueLanguageService.EmitDeltaForCompilation` now diffs the cached `CheckedAssemblyAfterOptimization` against the latest compilation, maps `FSharpSymbolChanges` onto baseline tokens, and invokes the delta emitter. `main6` seeds the session with optimized implementations on baseline capture, and `DeltaBuilder` translates typed-tree edits into method/type token projections. Coverage added via `RuntimeIntegrationTests.fs`, which compiles real F# code to ensure method-body edits produce IL/metadata deltas and advance generation bookkeeping.
-- [ ] Extend symbol mapping to handle additions/deletions (leveraging upcoming Task 2.5 symbol matcher) and surface the emitted deltas through CLI tooling (`dotnet watch`).
+- [ ] **TODO**: Extend symbol mapping to handle additions/deletions (currently classified as rude edits) and surface deltas through CLI tooling (`dotnet watch`). SymbolMatcher.fs and FSharpSymbolChanges.fs exist but additions/deletions are not yet supported.
 
 ### Task 2.5 – FSharpSymbolMatcher & Synthesized Member Mapping
 - **Scope**: Implement `FSharpSymbolMatcher` to map baseline symbols (including synthesized members) into the current compilation and introduce `FSharpSymbolChanges` to aggregate edit classifications for delta emission.
@@ -456,7 +524,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Context**: Mirrors Roslyn’s `SymbolMatcher`/`CSharpSymbolMatcher`; prerequisite for accurate metadata deltas.
 
 - **Status**: Completed (2025-11-01). Added `HotReload/SymbolMatcher.fs` to map baseline IL definitions (types/methods/fields) keyed by `MethodDefinitionKey`, and refactored `IlxDeltaEmitter` to reuse the matcher for token projection. Hot reload session plumbing now snapshots the latest `CheckedAssemblyAfterOptimization`, enabling `EmitDeltaForCompilation` to diff typed trees, map edits to tokens, and emit/commit deltas. Component/runtime tests exercise multi-generation emission and token stability.
-- [ ] Extend the matcher to understand synthesized members (closures, async/state-machine scaffolding, computation-expression builders) and ensure delta metadata preserves stable identities once Task 2.1 follow-ups on locals land.
+- [ ] **TODO (P2)**: Extend the matcher to understand complex synthesized members (closures, async state machines, computation expressions). `SymbolMatcher.fs` and `SynthesizedTypeMaps.fs` provide the foundation; extension needed for variable slot preservation.
 
 ## Milestone 3 – Tooling & API Surface
 
@@ -469,7 +537,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - API flagged as preview (requires `--langversion:preview`).
 - **Context**: Roslyn `ManagedHotReloadLanguageService`.
 - **Status**: In progress (updated 2025-11-02). Preview APIs (`StartHotReloadSession`, `EmitHotReloadDelta`, `EndHotReloadSession`, `HotReloadSessionActive`, `HotReloadCapabilities`) now drive the edit-and-continue service end-to-end. Metadata/IL/PDB deltas are emitted by default, multi-delta sessions run through the scripted demo, and the checker surfaces capability flags so hosts can negotiate supported features. Runtime apply remains behind the `FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY` feature flag while we stabilise the delta payloads. Checker and component hot reload suites continue to pass (`./.dotnet/dotnet test ...HotReload`).
-- [ ] (1) Validate runtime `MetadataUpdater.ApplyUpdate` end-to-end, retire the feature flag, and document the supported scenarios; (2) surface richer diagnostics/telemetry (delta sizes, rude-edit propagation) to IDE hosts before exiting preview; (3) refine capability negotiation after runtime apply is enabled (e.g., advertise structural-edit roadmap, document opt-in warnings).
+- [x] (1) Validate runtime `MetadataUpdater.ApplyUpdate` end-to-end ✅ **DONE (2025-12)**. Component test `ApplyUpdate succeeds for method body edit` validates this.
+- [ ] (2) **TODO**: Surface richer diagnostics/telemetry (delta sizes, rude-edit propagation) to IDE hosts before exiting preview.
+- [ ] (3) **TODO**: Retire the `FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY` feature flag, refine capability negotiation, and document the supported scenarios.
 - **Status 2025-11-17 (afternoon)**: `FSharpDeltaMetadataWriter` now logs Module rows in EncLog/EncMap so deltas mirror Roslyn’s bookkeeping, and `IlxDeltaEmitter` threads state-machine detection/local-signature synthesis through the metadata writer. The HotReload test filter and non-runtime smoke both pass, but runtime apply still fails (`MetadataUpdater.ApplyUpdate HR=0x80131509`) because async CustomAttribute/StandAloneSig rows for the demo method are still missing.
 - **Status 2025-11-17 (afternoon)**: `FSharpDeltaMetadataWriter` now logs Module rows in EncLog/EncMap, and `IlxDeltaEmitter` synthesizes return-parameter rows when baseline metadata lacks them, bringing Param table counts in line with Roslyn’s async baselines. `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug -f net10.0 --filter FullyQualifiedName~HotReload` plus the non-runtime smoke runs pass with the new rows, but runtime apply still fails (`MetadataUpdater.ApplyUpdate` -> `HR=0x80131509`) because the emitted deltas do not yet include Roslyn’s method-level `CustomAttribute`/`StandAloneSig` rows. Next step: flow the AsyncStateMachine attribute and local-signature capture all the way through `IlxDeltaEmitter` → `FSharpDeltaMetadataWriter`, validate via `tools/hot-reload/compare_roslyn.fsx`, and re-run the runtime smoke until `MetadataUpdater.ApplyUpdate` succeeds.
 - **Status 2025-11-17 (evening)**: StandAloneSig rows are now emitted for every edited method (we synthesize the empty `0x07 0x00` local signature when the body had none), and the newly restored Param rows point back to existing baseline handles, so `compare_roslyn.fsx AsyncUpdate …/metadata.bin` reports parity for Module/MethodDef/Param/StandAloneSig/TypeRef/MemberRef/AssemblyRef/EncLog/EncMap. Runtime apply continues to fail with `HR=0x80131509`, and the only remaining table gap vs. Roslyn is the missing method-level `CustomAttribute` entry. Next step: teach `IlxDeltaEmitter` to surface the AsyncStateMachine/NullableContext attributes without corrupting the delta (mdv currently shows `custom-attributes rows=0` for the demo scenario).
@@ -485,7 +555,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **High-priority follow-up (2025-11-17 late)**: Fix EncId/EncBaseId semantics for module rows. Roslyn leaves both fields `nil` for generation 0, sets only `EncId` for generation 1, then sets `EncBaseId` to the previous EncId for subsequent generations. Our delta currently writes both fields even on generation 1 (`EncId={current}, EncBaseId={baseline}`), which mdv flags as `Gen 0` in every delta. Task: adjust `IlxDeltaEmitter` so generation 1 uses `EncId=newGuid`, `EncBaseId=nil`, generation n≥2 threads `EncBaseId=previous EncId`, and mdv output matches Roslyn’s pattern.
 - **High-priority follow-up (method rows)**: Mirror Roslyn’s method-definition metadata. Roslyn reuses the baseline name/signature handles (mdv shows `#230/1:1`, `#117/1:f`) and preserves the baseline RVA (e.g., `0x00000004`) when emitting the delta. Our current method rows clone new string/blob handles (mdv just shows `#2f0`, `#7f`) and zero-out the RVA. Action: update `IlxDeltaEmitter`/`methodDefinitionRowsSnapshot` so we reuse baseline handles and keep the original RVA, then verify mdv shows the same heap references/addresses as the C# delta.
 - [x] ✅ RESOLVED (2025-12): CustomAttribute rows are now emitted. Service tests (`async multi-generation deltas preserve EncLog ordering`) verify CustomAttribute entries in EncLog/EncMap. ApplyUpdate tests pass with the emitted attributes.
-- [ ] (user-string reuse): Roslyn keeps the “Hello…” literal near the start of the `#US` heap (reusing the baseline handle), but our delta inserts a new string at a later offset (`#59`). Optional parity task: remap `ldstr` operands to the original baseline user-string handle so mdv shows the same offset and the delta doesn’t inflate the `#US` heap.
+- [ ] **OPTIONAL (optimization)**: User-string reuse. Roslyn keeps the `#US` heap literal at the baseline offset; our delta inserts at a new offset. Optional parity task: remap `ldstr` operands to baseline user-string handles to avoid inflating the `#US` heap.
 - [x] ✅ RESOLVED (2025-12): AssemblyRef parity achieved. Service tests verify correct AssemblyRef row emission with proper EncMap entries. Status 2025-11-18 (night) confirmed full parity.
 - [x] ✅ RESOLVED (2025-12): Param/StandAloneSig row emission fixed. Delta now correctly handles baseline reuse vs new row emission. Tests validate correct EncLog/EncMap entries.
 - [x] ✅ RESOLVED (2025-12): EncLog/EncMap ordering matches Roslyn. Service tests validate correct table ordering. Status 2025-11-18 (night) confirmed full parity.
@@ -507,7 +577,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Component tests ensure logging doesn’t regress functionality; documentation updated.
 - **Context**: `EditAndContinueSessionTelemetry` (Roslyn); internal telemetry guidelines.
 - **Status**: Completed (2025-11-01). Added `Activity` instrumentation around session start, delta emission, and checker APIs so hosts can trace generations (`HotReload/EditAndContinueLanguageService.fs`, `service.fs`). Tests exercised the new hooks via the existing hot reload suites.
-- [ ] Emit counters/structured events (success vs. fallback, rude edits) once metadata/PDB deltas are finalized so telemetry consumers gain richer insights.
+- [ ] **TODO (P2)**: Emit counters/structured events (success vs. fallback, rude edits) for richer telemetry insights. Activity instrumentation is already in place.
 
 ### Task 3.3 – dotnet watch / CLI Integration Scripts
 - **Scope**: Provide sample scripts and ensure CLI invocation works with feature flag.
@@ -517,9 +587,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Scripted tests pass (manual or automated), verifying CLI output and reflection changes.
 - **Context**: Roslyn watch integration tests; `dotnet watch` documentation.
 - **Status**: Completed (2025-11-01). Added `hot_reload_poc/scripts/run-hot-reload-watch.sh`, a portable helper that sets the required environment (`DOTNET_MODIFIABLE_ASSEMBLIES=debug`) and launches `dotnet watch --hot-reload` against the F# sample. Serves as the reference entry point for demos/manual validation using the existing TestApp project.
-- [ ] Automate the watch flow (capture console markers or reflection checks) once metadata/PDB deltas ship so CI can exercise the script without manual intervention.
-- [ ] (short term, 2025-11): Land an SDK-side `dotnet watch` integration that calls today’s `FSharpChecker` hot reload services directly, enabling an official watch demo without waiting on larger compiler infrastructure changes.
-- [ ] (long term): Evolve the compiler toward an `FSharpWorkspace`/`FSharpProject` abstraction—mirroring Roslyn workspaces as sketched in [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976)—so IDE hosts and `dotnet watch` share immutable solution snapshots, richer incremental analysis, and unified diagnostics.
+- [ ] **TODO**: Automate the watch flow in CI (capture console markers or reflection checks) once runtime apply is stable.
+- [ ] **TODO (blocked on SDK)**: Land SDK-side `dotnet watch` integration that calls `FSharpChecker` hot reload services directly.
+- [ ] **FUTURE**: Evolve the compiler toward an `FSharpWorkspace`/`FSharpProject` abstraction—mirroring Roslyn workspaces as sketched in [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976).
 
 **dotnet watch roadmap snapshot (2025-11-02)**
 - *Current status*: Hot reload works via the in-repo demo (`HotReloadDemoApp`) and scripted automation. Method-body deltas are emitted with `FSharpChecker.EmitHotReloadDelta`, applied through `MetadataUpdater.ApplyUpdate`, and the smoke test validates multi-delta sessions.
@@ -533,7 +603,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Acceptance Criteria**:
   - Docs reviewed, sample scripts runnable.
 - **Status**: Completed (2025-11-01). Added `docs/HotReload.md` describing the current manual workflow (helper script, environment variables, known gaps) so contributors can exercise the F# sample end-to-end and track remaining integration work.
-- [ ] Refresh the doc when metadata/PDB deltas ship and once the sample consumes the new compiler pipeline instead of the handcrafted delta generator.
+- [ ] **TODO**: Refresh `docs/HotReload.md` when metadata/PDB deltas ship. The HotReloadDemoApp now uses the compiler pipeline (not handcrafted deltas).
 
 ### Task 3.5 – Sample & Tooling Integration
 - **Scope**: Deliver a self-contained hot reload demo inside the `fsharp` repository (for example under `tests/projects/HotReloadDemo`) that exercises the new `FSharpChecker` APIs. Retire the ad hoc `hot_reload_poc` console harness.
@@ -546,8 +616,8 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Documentation (`docs/HotReload.md`, README snippets, or new sample docs) explains how to run the in-repo demo.
 - **Context**: Builds on Tasks 2.1 through 3.1; replaces the throwaway `TestApp` proof of concept with an in-repo showcase.
 - **Status**: Completed (2025-11-02). Added `tests/projects/HotReloadDemo/HotReloadDemoApp`, a net10.0 console that compiles `DemoTarget.fs` with the `FSharpChecker` hot reload APIs, applies deltas via `MetadataUpdater.ApplyUpdate`, and prints the temp source path/generation info for manual validation. The project is part of `FSharp.sln`, and `docs/HotReload.md` now documents the flow and the deprecation of the `hot_reload_poc` harness.
-- [ ] Audit whether to retire or repurpose `hot_reload_poc/scripts/run-hot-reload-watch.sh` once the SDK/CLI flow replaces that harness.
-- [ ] Wire the in-repo sample into `dotnet watch` and telemetry once the Task 2.x locals/synthesized-member work lands (keep automation progress tracked under Task 3.6).
+- [ ] **TODO (low priority)**: Audit whether to retire `hot_reload_poc/scripts/run-hot-reload-watch.sh` once SDK/CLI flow matures.
+- [ ] **TODO (blocked on SDK)**: Wire the in-repo sample (`HotReloadDemoApp`) into `dotnet watch` and telemetry.
 
 ### Task 3.6 – Hot Reload Demo Automation
 - **Scope**: Add a smoke test that launches `HotReloadDemoApp`, edits the generated workload, and verifies the emitted delta so regressions are caught automatically.
@@ -559,9 +629,9 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Documentation references the new regression gate.
 - **Context**: Builds on Task 3.5; prepares the ground for future `dotnet watch` integration.
 - **Status**: Completed (2025-11-02). `eng/Build.ps1` now invokes the hot reload demo smoke test during CoreCLR/desktop test runs, so CI surfaces regressions in the scripted workflow and fails the build if the success marker is missing.
-- [ ] Extend the scripted smoke test with deeper multi-delta coverage once runtime apply stabilises.
-- [ ] Capture telemetry/diagnostics (generation IDs, rude edits) from the automation to speed up mdv triage.
-- [ ] Evaluate wiring the scripted mode into `dotnet watch` once runtime apply becomes reliable.
+- [ ] **TODO**: Extend the scripted smoke test with deeper multi-delta coverage. Runtime apply now works; this can proceed.
+- [ ] **TODO (P2)**: Capture telemetry/diagnostics (generation IDs, rude edits) from the automation to speed up mdv triage.
+- [ ] **TODO (blocked on SDK)**: Evaluate wiring the scripted mode into `dotnet watch`.
 
 ### Task 3.7 – `fsc-watch` Hot Reload Demo (Short Term)
 - **Status**: Completed (2025-11-04). The CLI now applies deltas at runtime; the manual loop and the scripted harness both rebind the invocation target with the updated literal, the new `--clean-build` option keeps runs deterministic, and mdv command lines are captured alongside the emitted artifacts. Component coverage includes single-, multi-generation, and closure edits.
@@ -575,7 +645,7 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
   - Migration strategy documented for `FSharpChecker` consumers.
 - **Context**: Roadmap derived from [dotnet/fsharp#11976](https://github.com/dotnet/fsharp/issues/11976).
 - **Status**: Planned (2025-11-02). Execution staged for 2026 milestones; see roadmap note for timeline.
-- [ ] Subsequent tasks will cover analyzer hosting, IDE integration, and GA criteria.
+- [ ] **FUTURE (2026+)**: Subsequent tasks will cover analyzer hosting, IDE integration, and GA criteria.
 
 ---
 
@@ -587,7 +657,7 @@ Each task must:
 - Document the new tests in this plan so future steps keep adding regression coverage rather than relying on ad-hoc mdv runs.
 
 - After completing each task update this plan with the task status and capture any lessons for ARCHITECTURE_PROPOSAL.md/IMPLEMENTATION_PLAN.md.
-- [ ] Coordinate with SymbolMatcher work to ensure newly stabilized names are consumed when remapping definitions.
+- [x] Coordinate with SymbolMatcher work to ensure newly stabilized names are consumed when remapping definitions. **DONE**: `SymbolMatcher.fs` integrates with `SynthesizedTypeMaps.fs` for stable name reuse.
 
 ### Task 1.6 – Definition Map & Semantic Edit Classification
 - **Scope**: Build `FSharpDefinitionMap`/`FSharpSymbolChanges` to track Added/Updated/Deleted/Rude edits and synthesized members.
@@ -597,7 +667,7 @@ Each task must:
   - Unit tests mirror Roslyn `EditAndContinueAnalyzerTests` scenarios (method body update, inline change rude edit, union shape change, missing symbol).
   - Output consumed by `IlxDeltaEmitter` and future `FSharpSymbolMatcher` to build deltas.
 - **Context**: Roslyn’s `DefinitionMap`, `SymbolChanges`, `AddedOrChangedMethodInfo`.
-- [ ] Design `FSharpSynthesizedTypeMaps` and ensure `FSharpEmitBaseline` persists synthesized member metadata for reuse.
+- [x] Design `FSharpSynthesizedTypeMaps` and ensure `FSharpEmitBaseline` persists synthesized member metadata for reuse. **DONE**: `SynthesizedTypeMaps.fs` (with `FSharpSynthesizedTypeMaps` type) provides stable compiler-generated names; integrated with baseline capture.
 - **Status**: Completed (2025-10-30) — `TypedTreeDiff` annotates `SymbolId`/`SemanticEdit` with synthesis info, `FSharpDefinitionMap` surfaces synthesized helpers, and `FSharpSymbolChanges` aggregates the data with component coverage in `SymbolChangesTests.fs`.
 
 ### Task 2.x – mdv delta validation regression

@@ -12,6 +12,8 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status 2026-02-07 (Milestone 0 final verification rerun)**: Re-ran `cd fsharp && ./tests/scripts/hot-reload-verify.sh` after follow-up hardening; stages remained green with updated service count (`260` passed) and component count (`107` passed), including smoke/default, smoke/runtime-apply, and direct traced runtime-apply.
 - **Status 2026-02-07 (dotnet-watch F# test gate hardening)**: Added SDK regression coverage in `sdk/test/dotnet-watch.Tests/HotReload/ApplyDeltaTests.cs` (`68de339706`) to validate F# watch-loop edit application and rude-edit restart semantics with Roslyn-compatible restart behavior. Assertions now explicitly accept both managed apply and bridge-unavailable restart fallback (`FSharpChecker.StartHotReloadSession` missing) while still requiring restart markers for rude edits. Validated via `cd sdk && ./.dotnet/dotnet test test/dotnet-watch.Tests/dotnet-watch.Tests.csproj -c Debug --filter FullyQualifiedName~FSharp -- -dotnetPath .../artifacts/bin/redist/Debug/dotnet/dotnet`, then reran required `fsharp` gates (`build` succeeded, HotReload component filter `107` passed).
 - **Status 2026-02-07 (workspace snapshot bridge in compiler + SDK)**: Added snapshot-based hot reload checker overloads in `fsharp` (`04e92d03a`) and taught `dotnet-watch` to prefer an `FSharpWorkspace` snapshot bridge when those APIs are available (`sdk` commit `4947ff9558`), with automatic fallback to the existing project-options reflection path. Validation: `dotnet-watch` F# filter (`4` passed), plus required `fsharp` build/component HotReload gates after each commit.
+- **Status 2026-02-08 (workspace support completion + bridge hardening)**: Closed the `FSharpWorkspace.Query.GetProjectSnapshot returned None` integration gap end-to-end. `fsharp` commit `ed382175f` now drives `StartHotReloadSession`/`EmitHotReloadDelta` snapshot overloads through `ParseAndCheckProject(projectSnapshot)` (instead of converting snapshots back to project options) and adds a service regression that exercises full `FSharpWorkspace` session lifecycle from baseline snapshot to emitted delta. `sdk` commit `d53ea81e6d` hardens the bridge by handling static/instance `FSharpOption` accessors, preferring `FSharpWorkspace.Files.Edit(Uri,string)` with fallback to `Close`, preserving checker file-change notifications in workspace mode, gating workspace-snapshot preference to custom FCS path/explicit env opt-in, and mapping edited-file `NoChanges` to restart-required fallback for watch-loop safety. Validation: `fsharp` build passed, service HotReload filter passed (`262`), component HotReload filter passed (`107`), SDK `dotnet-watch` F# filter passed (`5`), and `tests/scripts/hot-reload-verify.sh` passed (all stages green).
+- **Status 2026-02-08 (method identity mapping and watch-loop in-place apply fix)**: Resolved the "Hot reload succeeded but output unchanged" path for loop demos by tightening method selection to user-authored identity with output evidence fallback. `service.fs` now (1) prioritizes symbol-resolved methods, (2) supplements with output-diff methods only when needed, and (3) when symbol/output disagree, prefers non-generated output evidence (e.g., `message`, `Greeter.get_Message`) over noisy caller selections (`main`). `EditAndContinueLanguageService.fs` now applies the same evidence filter at emission time, and `TypedTreeDiff.fs` now hashes member references by stable identity (type+compiled name) to reduce stamp-driven drift. Validation: checker/service regressions expanded (`HotReloadCheckerTests` now includes async user-method guard and `main` exclusion checks), component async mdv regression passes, and scripted `dotnet watch` loop demos apply in-place with `Hot reload succeeded` plus runtime output switching to `generation 1` for both module-function and property-getter edits.
 
 ## Milestone 0 - Integration Hardening and Host Alignment (2026-02-07)
 
@@ -738,3 +740,24 @@ Each task must:
 - **Risks/Mitigations**:
   - *Risk*: Divergent feature sets (e.g., inline functions) mean some Roslyn tests have no F# analog. *Mitigation*: document them explicitly and provide F#-specific replacements.
   - *Risk*: Test drift as Roslyn evolves. *Mitigation*: add a `tools/roslyn-parity/README.md` noting the Roslyn commit and script for refreshing expected EncLog/EncMap snapshots.
+
+### Investigation Update (2026-02-08) – dotnet-watch "applied but unchanged" / restart fallback
+
+- **Status**: Root cause resolved with live trace validation.
+- **Observed symptoms**:
+  - Managed delta reports success but app behavior stays unchanged.
+  - Some edits report `F# managed update produced no semantic delta for edited source files` and force restart.
+- **Root cause**:
+  - The F# diff/mapping path is operating on optimized implementation data (`src/Compiler/Service/service.fs:619`, `src/Compiler/Service/service.fs:652`), and edit classification therefore targets lowered bindings rather than user-authored methods.
+  - In a loop demo, an edit to `message` was classified as `main`, so the emitted delta updated `HotReloadDemo::main` instead of `HotReloadDemo::message` (`[fsharp-hotreload][typed-diff]` + `[fsharp-hotreload][delta-builder]` traces).
+  - In a class-member demo, an edit to `Greeter.Message` was classified as `greeter` and failed method-key resolution (`resolved=None`), producing `NoChanges` and restart fallback.
+- **Evidence captured**:
+  - `typed-diff` traces from `src/Compiler/TypedTree/TypedTreeDiff.fs` show body changes for `main`/`greeter`, not the edited method/member.
+  - `delta-builder` traces from `src/Compiler/HotReload/DeltaBuilder.fs` show method-key resolution to `HotReloadDemo::main` or no resolution.
+  - `dotnet-watch` traces from `src/BuiltInTools/dotnet-watch/HotReload/FSharp/FSharpHotReloadService.cs` show emitted tokens `UpdatedMethods=[0x06000002]` for the loop case.
+- **Instrumentation added (env gated)**:
+  - `FSHARP_HOTRELOAD_TRACE_METHODS=1` now logs typed-diff and delta-builder classification/resolution.
+  - `DOTNET_WATCH_TRACE_FSHARP_HOTRELOAD=1` now logs module-id stability and agent-side module matching diagnostics.
+- **Next fix track**:
+  - Completed: symbol/output method-selection reconciliation now prefers non-generated output evidence when symbol-only classification drifts to callers (for example `main`), while keeping symbol-first behavior for lowered async edits where output evidence only references synthesized helpers.
+  - Completed validation: loop demos now emit method tokens for `message` / `Greeter.get_Message` and apply in-place (`Hot reload succeeded`) without restart fallback.

@@ -25,6 +25,8 @@
 - **2026-02-07 Milestone 0 final verification rerun**: Re-executed `tests/scripts/hot-reload-verify.sh` after the follow-up hardening commits; all stages remained green with `260` service tests, `107` component tests, smoke default/runtime-apply, and direct runtime-apply trace assertions.
 - **2026-02-07 dotnet-watch F# test gate hardening**: SDK test coverage in `dotnet-watch.Tests` now exercises F# watch-loop edits and rude-edit restarts (`68de339706`). The assertions intentionally model Roslyn-style host semantics by accepting either managed apply or deterministic restart fallback when the F# bridge cannot call `FSharpChecker.StartHotReloadSession`, while still requiring explicit restart markers for rude edits.
 - **2026-02-07 workspace snapshot bridge update**: `FSharpChecker` now accepts `FSharpProjectSnapshot` inputs for `StartHotReloadSession`/`EmitHotReloadDelta` (`04e92d03a`), and `dotnet-watch` prefers an `FSharpWorkspace` snapshot bridge when those APIs exist (`4947ff9558`), with a safe fallback to the existing project-options reflection path. This narrows the remaining gap between the current host path and the long-term Roslyn-style workspace architecture.
+- **2026-02-08 workspace support completion**: The remaining workspace blocker is now closed across compiler + SDK. `fsharp` commit `ed382175f` routes snapshot session APIs through real snapshot parse/check flows (`ParseAndCheckProject(projectSnapshot)`) and adds a regression covering full `FSharpWorkspace` baseline/update snapshot lifecycle with successful delta emission. `sdk` commit `d53ea81e6d` fixes `FSharpOption` reflection for static accessor shapes, updates workspace change propagation to use `Files.Edit(Uri,string)` when available, keeps checker notifications aligned in workspace mode, and gates workspace-snapshot preference to custom-FCS/explicit env opt-in to avoid bundled-FCS instability. Validation remains green across required gates (`fsharp` build + component filter), service hot-reload tests (`262`), SDK F# watch tests (`5`), and full `tests/scripts/hot-reload-verify.sh`.
+- **2026-02-08 method-identity fix for watch loops**: Resolved the remaining "Hot reload succeeded but runtime output unchanged" gap by making method selection symbol-first with evidence reconciliation. `service.fs` now uses output-diff method evidence to override noisy caller-only symbol picks when evidence points to non-generated methods (`message`, `Greeter.get_Message`), while preserving symbol-first behavior when evidence is synthesized-only (async lowered helpers). `EditAndContinueLanguageService.fs` now applies the same reconciliation during emission, and `TypedTreeDiff.fs` now hashes member references by stable authored identity (declaring type + compiled name) rather than stamp-only references. End-to-end `dotnet watch` loop demos now apply in-place with runtime output moving to `generation 1` without restart.
 
 ## 2. Roslyn Hot Reload Pipeline (Reference Model)
 
@@ -588,6 +590,30 @@ These defaults should be revisited with stakeholders as implementation progresse
   - Deferred test scenarios: async state machines, lambda/closure edits, computation expressions, and multi-generation sequences should be validated once the delta writer supports them (tracked in IMPLEMENTATION_PLAN.md).
 - **Signature/optimization data**: confirm whether `.signature`/`.optimization` resources must be regenerated for deltas; document findings to avoid runtime regressions.
 - **Synthesized name stability**: Roslyn centralises helper naming in `Microsoft.CodeAnalysis.CSharp.Symbols.GeneratedNames`, where each compiler pass supplies explicit ordinals to pure helpers. F# still relies on the mutable `NiceNameGenerator`, so closure/helper names inherit line numbers. As of 2025-11-04 we persist baseline synthesized-name snapshots in `FSharpEmitBaseline` and reload them into `FSharpSynthesizedTypeMaps` whenever a session starts, ensuring method-body edits reuse the baseline name ordering. We still plan to replace `NiceNameGenerator` with a Roslyn-style `GeneratedNames` module backed by these maps so edits that introduce new helpers (closures, async/state machines) remain stable without relying on line numbers.
+
+## 9. Investigation Update (2026-02-08)
+
+- Root-cause investigation for `dotnet watch` F# managed updates showed the failure is in symbol-diff classification, not in runtime apply transport.
+- `service.fs` currently feeds `HotReloadOptimizationData` into diffing (`src/Compiler/Service/service.fs:619`, `src/Compiler/Service/service.fs:652`), and `EditAndContinueLanguageService` maps those edits directly to delta method keys (`src/Compiler/HotReload/EditAndContinueLanguageService.fs:177`, `src/Compiler/HotReload/EditAndContinueLanguageService.fs:184`).
+- With optimized implementation snapshots, edits to user code were observed as changes to lowered bindings (`main` or `greeter`) rather than the edited method/member, leading to:
+  - no-op applied deltas (`main` updated while `main` stays active in an infinite loop), or
+  - `NoChanges` fallback when lowered symbol names do not resolve to baseline method keys.
+- Added trace instrumentation (env-gated) in:
+  - `src/Compiler/TypedTree/TypedTreeDiff.fs` for body-hash edit classification (`[fsharp-hotreload][typed-diff] ...`),
+  - `src/Compiler/HotReload/DeltaBuilder.fs` for symbol-to-method resolution (`[fsharp-hotreload][delta-builder] ...`),
+  - `src/BuiltInTools/dotnet-watch/HotReload/FSharp/FSharpHotReloadService.cs` for module-id/token summaries,
+  - `src/BuiltInTools/HotReloadAgent/HotReloadAgent.cs` for module-match diagnostics.
+- Resolution implemented:
+  - `service.fs` now computes symbol updates and output-diff evidence together, then selects updated methods using:
+    1. direct symbol/evidence matches when present,
+    2. non-generated evidence methods when symbol classification only points at noisy callers,
+    3. symbol-only fallback when evidence is synthesized-only (for lowered async edits).
+  - `EditAndContinueLanguageService.fs` now mirrors the same selection policy at emit time, preventing drift between stale-output prechecks and actual emitted method rows.
+  - `TypedTreeDiff.fs` now hashes member references by stable identity, reducing stamp-churn caller false positives.
+- Current validated behavior:
+  - Module-function loop edit updates `Demo::message` token and applies in-place.
+  - Property loop edit updates `Demo.Greeter::get_Message` token and applies in-place.
+  - Async mdv regression no longer emits invalid synthesized updates (`Handle belongs to a future generation` resolved).
 
 ## 7. Implementation Roadmap
 

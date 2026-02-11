@@ -13,7 +13,10 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status 2026-02-07 (dotnet-watch F# test gate hardening)**: Added SDK regression coverage in `sdk/test/dotnet-watch.Tests/HotReload/ApplyDeltaTests.cs` (`68de339706`) to validate F# watch-loop edit application and rude-edit restart semantics with Roslyn-compatible restart behavior. Assertions now explicitly accept both managed apply and bridge-unavailable restart fallback (`FSharpChecker.StartHotReloadSession` missing) while still requiring restart markers for rude edits. Validated via `cd sdk && ./.dotnet/dotnet test test/dotnet-watch.Tests/dotnet-watch.Tests.csproj -c Debug --filter FullyQualifiedName~FSharp -- -dotnetPath .../artifacts/bin/redist/Debug/dotnet/dotnet`, then reran required `fsharp` gates (`build` succeeded, HotReload component filter `107` passed).
 - **Status 2026-02-07 (workspace snapshot bridge in compiler + SDK)**: Added snapshot-based hot reload checker overloads in `fsharp` (`04e92d03a`) and taught `dotnet-watch` to prefer an `FSharpWorkspace` snapshot bridge when those APIs are available (`sdk` commit `4947ff9558`), with automatic fallback to the existing project-options reflection path. Validation: `dotnet-watch` F# filter (`4` passed), plus required `fsharp` build/component HotReload gates after each commit.
 - **Status 2026-02-08 (workspace support completion + bridge hardening)**: Closed the `FSharpWorkspace.Query.GetProjectSnapshot returned None` integration gap end-to-end. `fsharp` commit `ed382175f` now drives `StartHotReloadSession`/`EmitHotReloadDelta` snapshot overloads through `ParseAndCheckProject(projectSnapshot)` (instead of converting snapshots back to project options) and adds a service regression that exercises full `FSharpWorkspace` session lifecycle from baseline snapshot to emitted delta. `sdk` commit `d53ea81e6d` hardens the bridge by handling static/instance `FSharpOption` accessors, preferring `FSharpWorkspace.Files.Edit(Uri,string)` with fallback to `Close`, preserving checker file-change notifications in workspace mode, gating workspace-snapshot preference to custom FCS path/explicit env opt-in, and mapping edited-file `NoChanges` to restart-required fallback for watch-loop safety. Validation: `fsharp` build passed, service HotReload filter passed (`262`), component HotReload filter passed (`107`), SDK `dotnet-watch` F# filter passed (`5`), and `tests/scripts/hot-reload-verify.sh` passed (all stages green).
-- **Status 2026-02-08 (method identity mapping and watch-loop in-place apply fix)**: Resolved the "Hot reload succeeded but output unchanged" path for loop demos by tightening method selection to user-authored identity with output evidence fallback. `service.fs` now (1) prioritizes symbol-resolved methods, (2) supplements with output-diff methods only when needed, and (3) when symbol/output disagree, prefers non-generated output evidence (e.g., `message`, `Greeter.get_Message`) over noisy caller selections (`main`). `EditAndContinueLanguageService.fs` now applies the same evidence filter at emission time, and `TypedTreeDiff.fs` now hashes member references by stable identity (type+compiled name) to reduce stamp-driven drift. Validation: checker/service regressions expanded (`HotReloadCheckerTests` now includes async user-method guard and `main` exclusion checks), component async mdv regression passes, and scripted `dotnet watch` loop demos apply in-place with `Hot reload succeeded` plus runtime output switching to `generation 1` for both module-function and property-getter edits.
+- **Status 2026-02-09 (Roslyn-style symbol identity mapping hardening)**: Removed output-diff evidence from method selection so hot reload now stays symbol-driven end-to-end (matching Roslyn intent). `service.fs` no longer runs output-assembly diff fallback selection; `EditAndContinueLanguageService.fs` consumes symbol-mapped updates directly; `TypedTreeDiff.SymbolId` now carries compiled-name/arity metadata used by `DeltaBuilder` for method key resolution. Follow-up fix: local/parameter `Expr.Val` hashing now uses logical identity instead of recompilation stamps, eliminating false-positive method-body updates in overload scenarios. New regression coverage in `HotReloadCheckerTests` (`Overloaded method-body edit updates matching overload token`) now guards this path. Validation: `build` passed, service HotReload filter passed (`266`), component HotReload filter passed (`107`).
+- **Status 2026-02-10 (same-arity overload disambiguation parity hardening)**: `fsharp` commit `15b872436` extends `TypedTreeDiff.SymbolId` with canonical parameter-type identities and updates `DeltaBuilder` to use those identities as a Roslyn-style tie-breaker when multiple baseline methods share the same compiled name/arity/generic arity. The matcher now preserves prior behavior for uniquely-resolved methods and only applies the signature filter on ambiguous candidates, avoiding broad `NoChanges` regressions while correctly targeting same-arity overload edits. Added service regression coverage (`Same-arity overloaded method-body edit updates matching overload token`) plus helper updates for expanded `SymbolId`. Validation: `build` passed, `HotReloadCheckerTests` filter passed (`15`), component HotReload filter passed (`107`).
+- **Status 2026-02-10 (generic-overload parity + watch-loop baseline hardening)**: `fsharp` commit `b694b01e6` completed generic overload targeting by encoding compiled-form parameter/return identities (including typar ordinals and method generic arity) into `SymbolId`, allowing `DeltaBuilder` to resolve generic ambiguity with Roslyn-style signature intent. SDK commit `826e7e359c` fixed first-edit watch-loop behavior by pre-bootstrapping F# project inputs at session start and tracking runtime module IDs per project so managed updates target the loaded assembly after forced compiles. SDK regression coverage now includes `ChangeFileInFSharpProjectWithLoop_FirstEditAppliesInPlace` and a stabilized rude-edit restart flow; validation: SDK F# filter (`6` passed), `fsharp` build passed, and `fsharp` component HotReload filter passed (`107`).
+- **Status 2026-02-11 (Roslyn no-change restart parity)**: SDK commit `38fad1b60c` updates the F# managed update bridge so `NoChanges` outcomes stay on the no-change path instead of forcing restart/rebuild. Added `dotnet-watch` regression `ChangeFileInFSharpProject_WhitespaceOnlyEditDoesNotRestart`, which asserts whitespace/no-op edits never require restart while allowing either `NoManagedCodeChangesToApply` or in-place apply outcomes. Validation: `dotnet-watch` test filter `FullyQualifiedName~ChangeFileInFSharpProject_WhitespaceOnlyEditDoesNotRestart` (`1` passed) and `FullyQualifiedName~FSharp` (`7` passed).
 
 ## Milestone 0 - Integration Hardening and Host Alignment (2026-02-07)
 
@@ -654,6 +657,37 @@ This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. 
 - **Status**: In progress (2026-02-07). `FSharpWorkspace` prototype APIs already exist in `src/Compiler/Service/FSharpWorkspace*.fs`, and the SDK bridge now consumes workspace snapshots for hot reload when available. Remaining work is the long-term immutable solution model/API consolidation captured in `notes/fsharp_workspace_roadmap.md`.
 - [ ] **FUTURE (2026+)**: Subsequent tasks will cover analyzer hosting, IDE integration, and GA criteria.
 
+#### 2026-02-11 UI Hot Reload Gap Matrix (Roslyn-inspired)
+
+Goal: prioritize UI editing scenarios (HTML DSL/computation-expression usage and MVUX/XAML/type-provider-driven flows) so compatible edits apply in place and avoid restart.
+
+1. `P0` CE/DSL usage edits in method bodies:
+   - Add explicit checker + `dotnet watch` coverage for computation-expression/DSL usage edits that should map to method-body updates.
+   - Keep method-token targeting on user-authored methods (no synthesized helper token drift).
+   - **Status (2026-02-11)**: ✅ Covered in both layers. Checker coverage exists in `HotReloadCheckerTests` (`Computation-expression usage edit updates user-authored view method token`), and SDK integration coverage now exercises in-place CE edit handling in `dotnet-watch.Tests` (`ChangeComputationExpressionUsageInFSharpProject_AppliesInPlace`, commit `3e15e57016`).
+2. `P0` Non-`.fs` dependency change plumbing:
+   - Treat project-local dependency file changes as F# managed-update candidates in `dotnet watch` (not only `.fs` edits).
+   - Ensure dependency changes flow through checker invalidation/refresh paths before delta emission.
+   - **Status (2026-02-11)**: ✅ Implemented in SDK (`ffd6a3742f`, `06ae82be35`, `a971c3d911`) with coverage for generic dependency files, XAML files, and command-line dependency mapping.
+3. `P0` Workspace snapshot dependency freshness:
+   - Track non-source input timestamps from command-line options in workspace project config hashing so snapshots refresh when those inputs change.
+   - Add workspace component coverage that proves snapshot/config version changes when tracked dependency inputs are edited.
+   - **Status (2026-02-11)**: ✅ Implemented in compiler (`fc189a911`). `ProjectConfig` now parses resource options with logical-name suffixes (for example `--resource:path,logicalName`) into tracked inputs, and `HotReloadCheckerTests` now verifies workspace snapshot config versions change when tracked dependency timestamps change.
+4. `P0` Type-provider-oriented cache invalidation:
+   - On dependency edits, invoke checker invalidation paths intended for configuration/provider refresh.
+   - Add integration coverage that dependency edits do not force restart by default and do not break subsequent in-place source updates.
+   - **Status (2026-02-11)**: ✅ Covered by combined SDK + compiler tests. SDK tests validate dependency edit no-restart behavior plus subsequent in-place source apply (`ChangeDependencyFileInFSharpProject_DoesNotRestart_AndSourceEditsStillApplyInPlace`, `ChangeXamlDependencyInFSharpProject_DoesNotRestart_AndSourceEditsStillApplyInPlace`), and checker-level coverage now validates dependency invalidation followed by successful source delta emission (`Tracked dependency invalidation keeps subsequent source edit hot-reloadable`, `fc189a911`).
+5. `P1` Rude-edit taxonomy expansion toward Roslyn:
+   - Extend F# diagnostics/classification beyond current coarse categories for nested lambda/state-machine/query shape changes.
+   - Mirror Roslyn-style runtime-rude distinctions where applicable to improve restart reasons.
+   - **Status (2026-02-11)**: ⏳ In progress. Explicit interface insertions now classify as `InsertExplicitInterface` (instead of coarse virtual insertion) with diagnostics + diff coverage (`02a3ca211`). Remaining work: finer-grained classifications for additional lowered/query/state-machine shapes.
+6. `P1` Provider parity test matrix:
+   - Add dedicated hot reload tests for provider-influenced edits (or equivalent fixtures) to validate symbol identity and restart/apply decisions.
+   - **Status (2026-02-11)**: ⏳ Partially covered with equivalent tracked-input fixtures (resource/XAML/dependency edit flows and invalidation semantics). A dedicated real type-provider fixture matrix is still pending.
+7. `P2` Active-statement/debugger parity:
+   - Keep as longer-term EnC parity work; not a blocker for `dotnet watch` CLI demos.
+   - **Status (2026-02-11)**: Deferred by design (non-blocker for current CLI/watch demo goals).
+
 ---
 
 Each task must:
@@ -758,6 +792,18 @@ Each task must:
 - **Instrumentation added (env gated)**:
   - `FSHARP_HOTRELOAD_TRACE_METHODS=1` now logs typed-diff and delta-builder classification/resolution.
   - `DOTNET_WATCH_TRACE_FSHARP_HOTRELOAD=1` now logs module-id stability and agent-side module matching diagnostics.
-- **Next fix track**:
-  - Completed: symbol/output method-selection reconciliation now prefers non-generated output evidence when symbol-only classification drifts to callers (for example `main`), while keeping symbol-first behavior for lowered async edits where output evidence only references synthesized helpers.
-  - Completed validation: loop demos now emit method tokens for `message` / `Greeter.get_Message` and apply in-place (`Hot reload succeeded`) without restart fallback.
+- **2026-02-09 follow-up (superseding evidence fallback)**:
+  - Removed output-diff method selection fallback from `service.fs` and emit-time filtering in `EditAndContinueLanguageService.fs`; updated method selection now relies on symbol mapping only.
+  - Extended `TypedTreeDiff.SymbolId` with compiled-name/arity metadata and updated `DeltaBuilder` matching so method resolution uses authored symbol identity rather than lowered-binding guesses.
+  - Fixed remaining false positives by hashing local/parameter references via logical identity (name + type), avoiding stamp-churn updates for unchanged overload bodies.
+  - Added regression `Overloaded method-body edit updates matching overload token`; full HotReload service/component filters are green with this coverage in place.
+- **2026-02-10 follow-up (generic signature parity hardening)**:
+  - `TypedTreeDiff` now encodes generic type variables in canonical IL-style form (`!n`) using compiled-form typar ordering (`GetValReprTypeInCompiledForm`) and threads method generic arity into `SymbolId`.
+  - `SymbolId` now carries `ReturnTypeIdentity`; `DeltaBuilder` uses parameter identity first and return identity second when resolving ambiguous overloads, staying conservative when no unique match exists.
+  - Added service regressions for both generic ambiguity shapes:
+    - `Same-arity overload with typar parameter edits generic overload token`
+    - `Same-arity overload with generic arity difference edits generic overload token`
+  - Validation snapshot on this update:
+    - `./.dotnet/dotnet build FSharp.sln -c Debug -v minimal` ✅
+    - `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` ✅ (`107` passed)
+    - `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReloadCheckerTests -v minimal` ✅ (`17` passed)

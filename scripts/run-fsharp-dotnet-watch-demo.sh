@@ -13,6 +13,7 @@ and starts `dotnet watch run`.
 Options:
   --demo-dir <path>        Demo directory (default: <repo>/HotReloadDemo)
   --project-name <name>    Project name for `dotnet new` (default: basename of demo dir)
+  --respect-env-fcs-path   Respect DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH from the shell
   --init-only              Scaffold and write Program.fs, but do not start watch
   --open-code              Open the demo directory in VS Code before starting watch
   --build-if-missing       Build sdk/fsharp artifacts if expected binaries are missing
@@ -34,6 +35,7 @@ PROJECT_NAME=""
 INIT_ONLY=0
 OPEN_CODE=0
 BUILD_IF_MISSING=0
+RESPECT_ENV_FCS_PATH=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --init-only)
       INIT_ONLY=1
+      shift
+      ;;
+    --respect-env-fcs-path)
+      RESPECT_ENV_FCS_PATH=1
       shift
       ;;
     --open-code)
@@ -115,7 +121,11 @@ resolve_sdk_fcs_path() {
 
 SDK_FCS_PATH_DEFAULT="$(resolve_sdk_fcs_path "$HR_DOTNET" "$HR_DOTNET_ROOT" || true)"
 FCS_PATH_FALLBACK="${REPO_ROOT}/fsharp/artifacts/bin/FSharp.Compiler.Service/Debug/netstandard2.0/FSharp.Compiler.Service.dll"
-FCS_PATH="${DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH:-${SDK_FCS_PATH_DEFAULT:-$FCS_PATH_FALLBACK}}"
+if [[ "$RESPECT_ENV_FCS_PATH" -eq 1 ]]; then
+  FCS_PATH="${DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH:-${SDK_FCS_PATH_DEFAULT:-$FCS_PATH_FALLBACK}}"
+else
+  FCS_PATH="${SDK_FCS_PATH_DEFAULT:-$FCS_PATH_FALLBACK}"
+fi
 
 build_artifacts_if_missing() {
   if [[ ! -x "$HR_DOTNET" ]]; then
@@ -149,6 +159,21 @@ if [[ ! -f "$FCS_PATH" ]]; then
   echo "      cd ${REPO_ROOT}/fsharp && ./.dotnet/dotnet build FSharp.sln -c Debug -v minimal" >&2
   echo "      or rerun this script with --build-if-missing" >&2
   exit 1
+fi
+
+if [[ "$RESPECT_ENV_FCS_PATH" -eq 0 ]] && [[ -n "${DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH:-}" ]]; then
+  if [[ -n "${SDK_FCS_PATH_DEFAULT:-}" ]]; then
+    resolved_selected_path="$(cd "$(dirname "$FCS_PATH")" && pwd)/$(basename "$FCS_PATH")"
+    resolved_env_path="$(cd "$(dirname "$DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH")" && pwd)/$(basename "$DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH")"
+    if [[ "$resolved_selected_path" != "$resolved_env_path" ]]; then
+      cat >&2 <<EOF_WARN
+[demo] NOTE: ignoring shell DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH to keep the demo SDK-matched.
+  shell:    $resolved_env_path
+  selected: $resolved_selected_path
+[demo] Pass --respect-env-fcs-path if you intentionally want to use the shell override.
+EOF_WARN
+    fi
+  fi
 fi
 
 if [[ -n "${SDK_FCS_PATH_DEFAULT:-}" ]] && [[ -f "$SDK_FCS_PATH_DEFAULT" ]]; then

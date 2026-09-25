@@ -474,3 +474,22 @@ Each task must:
   - Teach `FSharpSymbolMatcher` to import the map (mirroring Roslyn’s `SynthesizedTypeMaps`) so nested helper types resolve to baseline definitions.
   - Update `IlxDeltaEmitter` to consult the map before classifying helpers as new entities, keeping closure/async state machines aligned with baseline metadata.
   - Tests: keep the existing closure regression, add an async state-machine mdv regression, and add a checker-level unit test that ensures the map flows through public APIs.
+
+## Standalone watch outcome (2026-09-25)
+
+The standalone tool is packaged and installed globally as `fsharp-watch` version `0.1.0-preview.20260925.4`.
+The watch payload targets .NET 10 and includes the matched compiler.
+The package script builds both source checkouts and verifies every archive payload hash.
+
+Validation passed on macOS ARM64:
+
+- Single-project and library/application edits preserve the PID and application state.
+- Compiler-error recovery retains the process, and method removal restarts it.
+- Release runs honor both hot reload opt-out options.
+- The SDK bridge tests pass 22/22 without skips.
+- All 300 payload hashes match in the archive and global installation.
+- Ctrl+C stops every observed application process.
+
+The preview is local. It is not published to NuGet.
+Windows and Linux execution remain unverified.
+The [research note](notes/fsharp-watch-research-20260925.md) records the upstream protocol status and final source revisions.

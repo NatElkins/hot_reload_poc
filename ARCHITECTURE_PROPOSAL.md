@@ -610,3 +610,20 @@ These defaults should be revisited with stakeholders as implementation progresse
 - **Definition map and semantic edit classification**: Roslyn’s `DefinitionMap` and `SymbolChanges` capture per-symbol edit states (Added/Updated/Deleted/Rude) and drive edit diagnostics. The implemented `FSharpDefinitionMap`/`FSharpSymbolChanges` pair layers on `TypedTreeDiff`, tagging synthesized members (closures, async helpers) and exposing projection helpers consumed by future delta emit work.
 - **Synthesized type/member tracking**: reusable structures similar to `SynthesizedTypeMaps` must record anonymous types, delegates, closures, async state machines, computation expression scaffolding, and `PrivateImplementationDetails` generated in each generation.
 - **Variable slot allocator**: Roslyn’s `EncVariableSlotAllocator` maintains local slots/hoisted locals for method bodies. F# must track ILX locals (including async/state machine fields) so debugger state and metadata stay consistent across deltas; prototype a dedicated allocator to reuse slots.
+
+## Standalone watch preview (2026-09-25)
+
+The standalone `fsharp-watch` tool packages the watch prototype, matched Roslyn dependencies, and the experimental F# compiler.
+It uses the installed SDK for MSBuild and restore.
+The package contains neither an SDK nor a runtime.
+The child process selects the compiler and target import without project edits.
+
+The installed preview is `0.1.0-preview.20260925.4`.
+Both single-project and F# library/application smoke tests preserve state through two edits and compiler-error recovery.
+Method removal triggers a restart, and Ctrl+C stops the application processes.
+All 300 package payload hashes match the global installation.
+
+The SDK provider protocol remains under upstream discussion.
+The preview retains the final prototype transaction and capability fixes.
+See [the research note](notes/fsharp-watch-research-20260925.md) for source revisions, evidence, and platform limits.
+The next step is Windows and Linux verification before broader distribution.

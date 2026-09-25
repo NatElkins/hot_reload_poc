@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
+import zipfile
 
 
 def git_revision(root):
@@ -65,7 +67,20 @@ def main():
         "targetFramework": "net10.0",
         "sha256": hashes,
     }, indent=2) + "\n")
-    subprocess.run(["dotnet", "pack", str(root / "FSharpWatch.fsproj"), "-c", "Release", "-o", str(root / "artifacts")], check=True)
+    project = root / "FSharpWatch.fsproj"
+    subprocess.run(["dotnet", "pack", str(project), "-c", "Release", "-o", str(root / "artifacts")], check=True)
+    version = ET.parse(project).findtext("PropertyGroup/Version")
+    package = root / "artifacts" / f"fsharp-watch.{version}.nupkg"
+    prefix = "tools/net10.0/any/payload/"
+    with zipfile.ZipFile(package) as archive:
+        packaged = {name[len(prefix):] for name in archive.namelist()
+                    if name.startswith(prefix) and not name.endswith("/") and name != prefix + "provenance.json"}
+        if packaged != set(hashes):
+            raise RuntimeError("The package payload differs from the provenance file list.")
+        for name, expected in hashes.items():
+            if hashlib.sha256(archive.read(prefix + name)).hexdigest() != expected:
+                raise RuntimeError(f"The package contains a stale payload file: {name}")
+    print(f"Verified {len(hashes)} payload hashes in {package}")
 
 
 if __name__ == "__main__":

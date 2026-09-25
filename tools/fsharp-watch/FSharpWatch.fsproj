@@ -5,7 +5,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>fsharp-watch</ToolCommandName>
     <PackageId>fsharp-watch</PackageId>
-    <Version>0.1.0-preview.20260925.3</Version>
+    <Version>0.1.0-preview.20260925.4</Version>
     <Authors>Nat Elkins</Authors>
     <Description>Experimental F# hot reload through a standalone fork of dotnet watch.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -17,8 +17,8 @@
   <ItemGroup>
     <Compile Include="Program.fs" />
     <None Include="README.md" Pack="true" PackagePath="/" />
-    <Content Include="FSharpWatch.targets" Pack="false" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="payload/**/*" Pack="false" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="FSharpWatch.targets" Pack="false" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
+    <Content Include="payload/**/*" Pack="false" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
   </ItemGroup>
   <Target Name="ValidatePayload" BeforeTargets="Pack">
     <Error Condition="!Exists('payload/watch/dotnet-watch.dll')" Text="Run pack.py with the SDK and compiler checkout paths before pack." />

@@ -31,7 +31,7 @@ Sources: [browser activation](https://github.com/dotnet/sdk/pull/56234), [proces
 The global tool bundles the existing watch fork, its Roslyn dependencies, and a matched F# compiler.
 It uses the selected installed SDK for MSBuild, restore, and application launch.
 The package contains neither an SDK nor a runtime.
-The launcher honors the project's SDK selection through `dotnet --info`.
+The launcher honors SDK selection from the current directory through `dotnet --info`, as `dotnet watch` does.
 
 The tool requires .NET SDK 10.0.400 or later, plus the .NET 10 ASP.NET Core runtime.
 The official current SDK is 10.0.401, released September 8.

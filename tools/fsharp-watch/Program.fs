@@ -6,7 +6,7 @@ open System.IO
 open System.Reflection
 open System.Text.Json
 
-/// Resolve the SDK through the CLI so that the project's global.json remains authoritative.
+/// Resolve the SDK through the CLI from the current directory, as dotnet watch does.
 let private findSdk () =
     let host =
         match Environment.GetEnvironmentVariable "DOTNET_HOST_PATH" with
@@ -56,7 +56,7 @@ let private run (args: string array) =
         for arg in args do start.ArgumentList.Add arg
         start.Environment["FSHARP_WATCH_SDK_DIRECTORY"] <- sdk
         start.Environment["DOTNET_HOST_PATH"] <- host
-        // These properties affect only the child child. Project files and the installed SDK stay intact.
+        // These properties affect only the child process. Project files and the installed SDK stay intact.
         start.Environment["DotnetFscCompilerPath"] <- Path.Combine(root, "payload", "FSharp", "fsc.dll")
         start.Environment["DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH"] <- Path.Combine(root, "payload", "FSharp", "FSharp.Compiler.Service.dll")
         start.Environment["FSHARP_WATCH_ENABLE_HOT_RELOAD"] <-

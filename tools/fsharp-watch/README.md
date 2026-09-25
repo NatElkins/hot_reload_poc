@@ -29,6 +29,7 @@ dotnet tool install --global fsharp-watch --prerelease --add-source tools/fsharp
 ```
 
 The script builds both source checkouts before package creation.
+It verifies every packaged payload file against its provenance hash.
 The compiler build targets .NET 10 with MSBuild 18.7.1 dependencies.
 Use a dedicated compiler checkout because these framework properties differ from its default build.
 

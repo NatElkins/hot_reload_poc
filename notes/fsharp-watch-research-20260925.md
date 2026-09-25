@@ -55,28 +55,45 @@ The build script uses existing MSBuild 18.7.1 packages for the current compiler'
 
 ## Verification
 
-The first full installed-tool smoke passed with the current compiler source at `b66ed5eec4`.
-The SDK fork was `3094a2e441`.
-The smoke used a project path with spaces and no project modifications.
-The package measured approximately 28 MB.
+The installed version is `0.1.0-preview.20260925.4`.
+Its compiler source is `8b30815999b7f0f46bb8e66d4a533d59cd0075c1`.
+Its SDK source is `8e1416d2f88b70a0767c4e36c9541cbac723fb42`.
+The SDK fork includes the final prototype's transaction, capability, baseline, and ancestor-restart fixes.
+The package size is 29,664,926 bytes.
+Its SHA-256 is `f0c4d58ef5df980a17acbd4e4651680cd51318a2e78968ebcbd8cd5018a508cb`.
 
-The observed application evidence was:
+Both builds passed with zero warnings and errors.
+The SDK bridge and reflection tests passed 22/22, with zero skips.
+The test host and SDK redist watch DLL hashes matched.
+The archive and global installation each passed all 300 payload hash checks.
 
-- First edit: PID 68170, counter 13, message TWO.
-- Second edit: PID 68170, counter 24, message THREE.
-- Compiler-error recovery: PID 68170, counter 43, message RECOVERED.
-- Method removal: PID 68673, counter 1, message RESTARTED.
-- Cleanup: both application PIDs stopped.
+The final smoke scenarios used project paths with spaces and no project modifications.
+The results were:
 
-The transcript is `/tmp/fsharp-watch-smoke-complete/watch.log`.
-The assertions and results are in `/tmp/fsharp-watch-smoke-complete/result.json`.
-The global installation is `fsharp-watch` version `0.1.0-preview.20260925.2`.
-Both single-project and F# library/application scenarios passed against that command.
-The fresh transcripts and results reside under `/tmp/fsharp-watch-global-single` and `/tmp/fsharp-watch-global-multi`.
-Both scenarios preserve the PID through two edits and compiler-error recovery, then restart after a method removal.
-The SDK bridge and reflection unit tests passed 13/13, with zero skipped tests.
+| Scenario | First edit | Second edit | Error recovery | Rude-edit restart |
+| --- | --- | --- | --- | --- |
+| Single project | PID 80503, counter 14 | PID 80503, counter 26 | PID 80503, counter 46 | PID 81158, counter 1 |
+| F# library and app | PID 81307, counter 17 | PID 81307, counter 28 | PID 81307, counter 47 | PID 81835, counter 1 |
+
+Both scenarios applied two generations in place and preserved state after a compiler error.
+A method removal triggered a rebuild and restart.
+The multi-project scenario first edited the library, then the application.
+Every observed application process stopped after the smoke driver sent Ctrl+C.
+
+The transcripts and assertion results reside in these directories:
+
+- `/tmp/fsharp-watch-final-single`
+- `/tmp/fsharp-watch-final-multi`
+- `/tmp/fsharp-watch-final-optout`
+
+Release builds also passed with `SupportsHotReload=false` and with `--no-hot-reload`.
+The launcher preserved the project files and stopped both applications.
+A pinned `global.json` experiment verified that SDK selection follows the current directory, including with an external `--project` path.
+
+The archive audit exposed stale dependencies under MSBuild's `PreserveNewest` copy rule.
+Payload files now use `Always`, and `pack.py` rejects archive hashes that differ from the source payload.
+The local version 0.1.0-preview.20260925.3 was superseded before the final smoke tests.
+
 The launcher project cannot use `dotnet format`, which supports only C# and Visual Basic.
 The SDK formatter reports one existing whitespace defect outside the edited lines in `CompilationHandler.cs`.
-
-Final packaging must repeat the smoke scenarios after the remaining compiler review fixes land.
 This local execution proves macOS ARM64 behavior. Windows and Linux execution remain unverified.

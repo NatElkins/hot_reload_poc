@@ -3,6 +3,7 @@
 `fsharp-watch` applies supported F# edits to a live application through a standalone fork of `dotnet watch`.
 The package includes the watch engine, its Roslyn dependencies, and the experimental F# compiler.
 The tool uses the installed .NET SDK for MSBuild and project restore.
+The current directory determines SDK selection, including `global.json`, as it does for `dotnet watch`.
 The tool requires .NET SDK 10.0.400 or later and the .NET 10 ASP.NET Core runtime, which the SDK includes.
 
 ## Run a project

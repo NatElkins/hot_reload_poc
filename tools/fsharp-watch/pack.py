@@ -25,7 +25,6 @@ def main():
     parser.add_argument("--sdk", type=Path, required=True)
     parser.add_argument("--fsharp", type=Path, required=True)
     parser.add_argument("--configuration", default="Debug", choices=["Debug", "Release"])
-    parser.add_argument("--no-build", action="store_true", help="Reuse build outputs from these exact source revisions.")
     args = parser.parse_args()
     args.sdk = args.sdk.resolve()
     args.fsharp = args.fsharp.resolve()
@@ -37,10 +36,9 @@ def main():
                           "-p:FSharpNetCoreProductTargetFramework=net10.0", "-p:MicrosoftBuildVersion=18.7.1",
                           "-p:MicrosoftBuildFrameworkVersion=18.7.1", "-p:MicrosoftBuildTasksCoreVersion=18.7.1",
                           "-p:MicrosoftBuildUtilitiesCoreVersion=18.7.1", "-v", "minimal", "-m:2", "-nr:false"]
-    if not args.no_build:
-        subprocess.run([str(args.sdk / ".dotnet/dotnet"), *sdk_arguments], cwd=args.sdk, check=True)
-        subprocess.run([str(args.fsharp / ".dotnet/dotnet"), *compiler_arguments], cwd=args.fsharp,
-                       env=dict(os.environ, BUILDING_USING_DOTNET="true"), check=True)
+    subprocess.run([str(args.sdk / ".dotnet/dotnet"), *sdk_arguments], cwd=args.sdk, check=True)
+    subprocess.run([str(args.fsharp / ".dotnet/dotnet"), *compiler_arguments], cwd=args.fsharp,
+                   env=dict(os.environ, BUILDING_USING_DOTNET="true"), check=True)
     watch = args.sdk / "artifacts/bin/dotnet-watch/Release/net10.0"
     compiler = args.fsharp / f"artifacts/bin/fsc/{args.configuration}/net10.0"
     for required in [watch / "dotnet-watch.dll", compiler / "fsc.dll", compiler / "FSharp.Compiler.Service.dll"]:

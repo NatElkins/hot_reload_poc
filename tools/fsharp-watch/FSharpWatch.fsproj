@@ -5,7 +5,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>fsharp-watch</ToolCommandName>
     <PackageId>fsharp-watch</PackageId>
-    <Version>0.1.0-preview.20260925.2</Version>
+    <Version>0.1.0-preview.20260925.3</Version>
     <Authors>Nat Elkins</Authors>
     <Description>Experimental F# hot reload through a standalone fork of dotnet watch.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

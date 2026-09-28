@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--stock-host", type=Path, required=True)
     parser.add_argument("--stock-version", default="10.0.401")
+    parser.add_argument("--stock-second-host", type=Path, required=True, help="Unchanged stock SDK11 installation.")
     parser.add_argument("--private-host", type=Path, required=True)
     parser.add_argument("--first-sdk", default="10.0.401")
     parser.add_argument("--second-sdk", default="11.0.100-rc.1.26420.103")
@@ -31,6 +32,8 @@ def main():
     smoke = Path(__file__).with_name("smoke.py")
     cases = [
         ("stock-fallback", args.stock_host, args.stock_version, ["--expect-restart", "--hold-preflight"]),
+        ("stock-sdk11-fallback", args.stock_second_host, args.second_sdk,
+         ["--expect-restart", "--hold-preflight", "--framework", "net11.0"]),
         ("sdk10-single", args.private_host, args.first_sdk, []),
         ("sdk10-multi", args.private_host, args.first_sdk, ["--multi-project"]),
         ("sdk11-single-identity", args.private_host, args.second_sdk,

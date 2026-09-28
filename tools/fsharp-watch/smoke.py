@@ -135,6 +135,7 @@ def main():
     parser.add_argument("--sdk-host", type=Path, help="Select an isolated dotnet installation through DOTNET_HOST_PATH.")
     parser.add_argument("--sdk-version", help="Pin normal SDK selection through a fixture global.json.")
     parser.add_argument("--multi-project", action="store_true")
+    parser.add_argument("--framework", default="net10.0", help="Target framework for the plain acceptance application.")
     parser.add_argument("--expect-restart", action="store_true", help="Require fallback for a real unsupported SDK.")
     parser.add_argument("--opt-out", choices=["argument", "project", "environment", "release"])
     parser.add_argument("--hold-preflight", action="store_true", help="Correct a source edit during a held fallback build.")
@@ -168,6 +169,7 @@ def main():
   <ItemGroup><Compile Include="Program.fs" /></ItemGroup>
 </Project>
 '''
+    project_text = project_text.replace("net10.0", args.framework)
     if args.opt_out == "project":
         project_text = project_text.replace("</PropertyGroup>", "<SupportsHotReload>false</SupportsHotReload></PropertyGroup>")
     library = project / "Library"
@@ -178,7 +180,7 @@ def main():
   <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
   <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
 </Project>
-''')
+'''.replace("net10.0", args.framework))
         protected[library_project] = digest(library_project)
         write_source(library / "Library.fs", 'namespace WatchLibrary\nmodule Message =\n    let text () = "ONE"\n')
         project_text = project_text.replace('</Project>', '<ItemGroup><ProjectReference Include="Library/Library.fsproj" /></ItemGroup></Project>')

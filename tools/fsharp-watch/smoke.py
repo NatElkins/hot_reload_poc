@@ -1,42 +1,187 @@
 #!/usr/bin/env python3
-"""Verify real edits through an installed tool, then stop every process from the test."""
+"""Verify an installed tool through real SDK compilers and bounded application edits."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
+
+
+APPLICATION = r"pid:(\d+) count:(\d+) message:"
+FRESH_SESSION = "fsharp-watch: SDK or compiler changed. Starting a fresh watch session."
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_source(path, text):
+    temporary = path.with_suffix(path.suffix + ".new")
+    temporary.write_text(text)
+    temporary.replace(path)
+
+
+def processes(group):
+    output = subprocess.check_output(["ps", "-axo", "pid=,pgid=,args="], text=True)
+    result = {}
+    for line in output.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) == 3 and int(fields[1]) == group:
+            result[int(fields[0])] = fields[2]
+    return result
+
+
+class Watch:
+    """Own the process group and retain output after failures for diagnosis."""
+
+    def __init__(self, command, cwd, env, output):
+        self.lines = []
+        self.output = output
+        self.log = (output / "watch.log").open("w")
+        self.child = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        self.reader = threading.Thread(target=self.read_output, daemon=True)
+        self.reader.start()
+
+    def read_output(self):
+        for line in self.child.stdout:
+            self.lines.append(line)
+            self.log.write(line)
+            self.log.flush()
+
+    def wait_for(self, pattern, start=0, timeout=120):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for index, line in enumerate(self.lines[start:], start):
+                match = re.search(pattern, line)
+                if match:
+                    return match, index
+            if self.child.poll() is not None:
+                raise RuntimeError(f"Watch exited with {self.child.returncode}. See {self.output / 'watch.log'}")
+            time.sleep(0.1)
+        raise TimeoutError(f"No output matched {pattern!r}. See {self.output / 'watch.log'}")
+
+    def application(self, message, start=0, previous_pid=None):
+        prefix = APPLICATION if previous_pid is None else rf"pid:(?!{previous_pid}\b)(\d+) count:(\d+) message:"
+        match, index = self.wait_for(prefix + re.escape(message) + r"\s*$", start)
+        return {"pid": int(match[1]), "count": int(match[2]), "message": message}, index
+
+    def engines(self):
+        result = sorted(pid for pid, command in processes(self.child.pid).items()
+                        if "dotnet-watch.dll" in command and "--fsharp-watch-probe" not in command)
+        assert result, "No live watch engine was found in the process group."
+        return result
+
+    def close(self):
+        before = processes(self.child.pid)
+        for sig, timeout in [(signal.SIGINT, 15), (signal.SIGKILL, 5)]:
+            try:
+                os.killpg(self.child.pid, sig)
+            except ProcessLookupError:
+                break
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                self.child.poll()
+                if not processes(self.child.pid):
+                    break
+                time.sleep(0.1)
+            if not processes(self.child.pid):
+                break
+        self.child.wait(timeout=5)
+        self.reader.join(timeout=5)
+        self.log.close()
+        remaining = processes(self.child.pid)
+        assert not remaining, f"Processes survived cleanup: {remaining}"
+        app_pids = {int(match[1]) for line in self.lines if (match := re.search(APPLICATION, line))}
+        for pid in app_pids:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise AssertionError(f"Application process {pid} survived cleanup.")
+        return {"watchExitCode": self.child.returncode, "stoppedProcessIds": sorted(before),
+                "applicationPidsStopped": sorted(app_pids)}
+
+
+def assert_edit(previous, current, reload):
+    if reload:
+        assert current["pid"] == previous["pid"], "A body edit restarted the application."
+        assert current["count"] > previous["count"], "The application state did not survive."
+    else:
+        assert current["pid"] != previous["pid"], "Fallback did not restart the application."
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", default="fsharp-watch")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--multi-project", action="store_true", help="Alternate edits between an F# library and its application.")
+    parser.add_argument("--sdk-host", type=Path, help="Select an isolated dotnet installation through DOTNET_HOST_PATH.")
+    parser.add_argument("--sdk-version", help="Pin normal SDK selection through a fixture global.json.")
+    parser.add_argument("--multi-project", action="store_true")
+    parser.add_argument("--expect-restart", action="store_true", help="Require fallback for a real unsupported SDK.")
+    parser.add_argument("--opt-out", choices=["argument", "project", "environment", "release"])
+    parser.add_argument("--touch-compiler", action="store_true", help="Require identical compiler bytes to preserve the session.")
+    parser.add_argument("--compiler-replacement", type=Path, help="Replace private fixture FCS with a compatible real build.")
+    parser.add_argument("--next-sdk-version", help="Change global.json to another SDK in the same private installation.")
     args = parser.parse_args()
+    args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     project = args.output / "sample with spaces"
     project.mkdir(exist_ok=True)
+    env = dict(os.environ, DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER="1", DOTNET_WATCH_SUPPRESS_EMOJIS="1",
+               DOTNET_WATCH_TRACE_FSHARP_HOTRELOAD="1", DOTNET_CLI_UI_LANGUAGE="en-US")
+    # Ambient compiler overrides cannot establish SDK ownership.
+    for name in ["DotnetFscCompilerPath", "DOTNET_WATCH_FSHARP_COMPILER_SERVICE_PATH",
+                 "FSHARP_WATCH_ENABLE_HOT_RELOAD", "FSHARP_WATCH_ORIGINAL_COMMON_TARGETS"]:
+        env.pop(name, None)
+    if args.sdk_host:
+        args.sdk_host = args.sdk_host.resolve()
+        env["DOTNET_HOST_PATH"] = str(args.sdk_host)
+        env["DOTNET_ROOT"] = str(args.sdk_host.parent)
+        env["PATH"] = str(args.sdk_host.parent) + os.pathsep + env.get("PATH", "")
+    host = str(args.sdk_host or env.get("DOTNET_HOST_PATH", "dotnet"))
+    protected = {}
+    if args.sdk_version:
+        pin = project / "global.json"
+        pin.write_text(json.dumps({"sdk": {"version": args.sdk_version, "rollForward": "disable"}}) + "\n")
+        protected[pin] = digest(pin)
     project_text = '''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup>
   <ItemGroup><Compile Include="Program.fs" /></ItemGroup>
 </Project>
 '''
+    if args.opt_out == "project":
+        project_text = project_text.replace("</PropertyGroup>", "<SupportsHotReload>false</SupportsHotReload></PropertyGroup>")
+    library = project / "Library"
     if args.multi_project:
-        library = project / "Library"
         library.mkdir(exist_ok=True)
-        (library / "Library.fsproj").write_text('''<Project Sdk="Microsoft.NET.Sdk">
+        library_project = library / "Library.fsproj"
+        library_project.write_text('''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
   <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
 </Project>
 ''')
-        (library / "Library.fs").write_text('namespace WatchLibrary\nmodule Message =\n    let text () = "ONE"\n')
+        protected[library_project] = digest(library_project)
+        write_source(library / "Library.fs", 'namespace WatchLibrary\nmodule Message =\n    let text () = "ONE"\n')
         project_text = project_text.replace('</Project>', '<ItemGroup><ProjectReference Include="Library/Library.fsproj" /></ItemGroup></Project>')
-    (project / "Sample.fsproj").write_text(project_text)
-    original_project = (project / "Sample.fsproj").read_bytes()
+    project_file = project / "Sample.fsproj"
+    project_file.write_text(project_text)
+    protected[project_file] = digest(project_file)
+    sentinel = args.output / "existing import.targets"
+    sentinel.write_text('''<Project><Target Name="FSharpWatchAcceptanceImport" BeforeTargets="CoreCompile">
+<Message Importance="high" Text="FSHARP_WATCH_EXISTING_IMPORT $(MSBuildProjectName) flags=$(OtherFlags) capability=@(ProjectCapability)" />
+</Target></Project>
+''')
+    protected[sentinel] = digest(sentinel)
+    env["CustomAfterMicrosoftCommonTargets"] = str(sentinel)
+    if args.opt_out == "environment":
+        env["DOTNET_WATCH_FSHARP_HOTRELOAD"] = "0"
     source = '''open System
 open System.Runtime.CompilerServices
 
@@ -55,82 +200,149 @@ while true do
     if args.multi_project:
         source = source.replace('message:ONE" Environment.ProcessId count', 'message:ONE-%s" Environment.ProcessId count (WatchLibrary.Message.text())')
     file = project / "Program.fs"
-    file.write_text(source)
-    env = dict(os.environ, DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER="1", DOTNET_WATCH_SUPPRESS_EMOJIS="1",
-               DOTNET_WATCH_TRACE_FSHARP_HOTRELOAD="1", DOTNET_CLI_UI_LANGUAGE="en-US")
-    lines = []
-    log = (args.output / "watch.log").open("w")
-    child = subprocess.Popen([args.tool, "--project", str(project / "Sample.fsproj"), "--non-interactive", "--verbose"],
-                             cwd=project, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, start_new_session=True)
-    def read_output():
-        for line in child.stdout:
-            lines.append(line)
-            log.write(line)
-            log.flush()
-    reader = threading.Thread(target=read_output, daemon=True)
-    reader.start()
-    def wait_for(pattern, start=0, timeout=90):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for index, line in enumerate(lines[start:], start):
-                match = re.search(pattern, line)
-                if match:
-                    return match, index
-            if child.poll() is not None:
-                raise RuntimeError(f"Watch exited with {child.returncode}. See {args.output / 'watch.log'}")
-            time.sleep(0.1)
-        raise TimeoutError(f"No output matched {pattern!r}. See {args.output / 'watch.log'}")
-    evidence = {}
+    write_source(file, source)
+    evaluation = subprocess.check_output([host, "msbuild", str(project_file),
+        "-getProperty:DotnetFscCompilerPath,MSBuildToolsPath"], cwd=project, env=env, text=True)
+    properties = json.loads(evaluation)["Properties"]
+    compiler = Path(properties["DotnetFscCompilerPath"].strip('"')).parent / "FSharp.Compiler.Service.dll"
+    mutable_compiler = args.touch_compiler or args.compiler_replacement
+    if mutable_compiler:
+        assert args.sdk_host, "Compiler mutation requires an explicit private SDK host."
+        assert (args.sdk_host.parent / ".fsharp-watch-private-sdk").is_file(), "Private SDK marker is absent."
+        assert compiler.resolve().is_relative_to(args.sdk_host.parent), "The compiler escapes the private SDK fixture."
+    original_compiler = compiler.read_bytes() if args.compiler_replacement else None
+    compiler_times = compiler.stat().st_atime_ns, compiler.stat().st_mtime_ns
+    command = [args.tool, "--project", str(project_file), "--non-interactive", "--verbose"]
+    if args.opt_out == "argument":
+        command.append("--no-hot-reload")
+    if args.opt_out == "release":
+        command.extend(["--configuration", "Release"])
+    evidence = {"compiler": str(compiler), "compilerSha256": digest(compiler), "sdk": properties["MSBuildToolsPath"],
+                "expectedMode": "restart" if args.expect_restart or args.opt_out else "hot-reload"}
+    watch = Watch(command, project, env, args.output)
+    library_message = "ONE"
+    app_message = "ONE"
+
+    def message_text(message):
+        return f"{message}-{library_message}" if args.multi_project else message
+
+    error = None
     try:
-        initial, _ = wait_for(r"pid:(\d+) count:(\d+) message:ONE")
-        first_pid = initial[1]
-        for generation, message in enumerate(["TWO", "THREE"], 1):
-            before = len(lines)
-            if args.multi_project and generation == 1:
-                (library / "Library.fs").write_text('namespace WatchLibrary\nmodule Message =\n    let text () = "TWO"\n')
-                expected = "ONE-TWO"
+        watch.wait_for("FSHARP_WATCH_EXISTING_IMPORT")
+        initial, _ = watch.application(message_text("ONE"))
+        if args.expect_restart:
+            watch.wait_for(r"F# hot reload unavailable:.*Edits use rebuild and restart\.")
+        elif not args.opt_out:
+            watch.wait_for(re.escape(f"F# hot reload uses SDK compiler '{compiler.parent / 'fsc.dll'}'."))
+        current = initial
+        evidence["initial"] = initial
+        reload = not (args.expect_restart or args.opt_out)
+        for generation, message in enumerate(["TWO", "THREE", "FOUR"] if args.multi_project else ["TWO", "THREE"], 1):
+            before = len(watch.lines)
+            if args.multi_project and generation in (1, 3):
+                library_message = message
+                write_source(library / "Library.fs", f'namespace WatchLibrary\nmodule Message =\n    let text () = "{message}"\n')
             else:
-                file.write_text(source.replace("ONE", message))
-                expected = f"{message}-TWO" if args.multi_project else message
-            match, _ = wait_for(rf"pid:(\d+) count:(\d+) message:{expected}", before)
-            assert match[1] == first_pid, "A body edit restarted the application."
-            assert int(match[2]) > int(initial[2]), "The application state did not survive."
-            evidence[f"generation{generation}"] = match.group(0)
-        before = len(lines)
-        file.write_text(source.replace('"pid:', 'BROKEN "pid:'))
-        wait_for(r"error FS|FSHRDL|[Cc]ompil(?:e|ation).*fail", before)
-        before = len(lines)
-        file.write_text(source.replace("ONE", "RECOVERED"))
-        recovered, _ = wait_for(r"pid:(\d+) count:(\d+) message:RECOVERED", before)
-        assert recovered[1] == first_pid, "Correction of a compiler error restarted the application."
-        evidence["errorRecovery"] = recovered.group(0)
-        before = len(lines)
-        file.write_text(source.replace("ONE", "RESTARTED").replace("_.Message()", "_.Renamed()").replace("counter.Message()", "counter.Renamed()"))
-        restarted, _ = wait_for(r"pid:(\d+) count:(\d+) message:RESTARTED", before)
-        assert restarted[1] != first_pid, "A method removal did not restart the application."
-        evidence["rudeEditRestart"] = restarted.group(0)
-        assert (project / "Sample.fsproj").read_bytes() == original_project, "The tool changed the project."
+                app_message = message
+                write_source(file, source.replace("ONE", message))
+            expected = message_text(app_message)
+            updated, _ = watch.application(expected, before)
+            assert_edit(current, updated, reload)
+            evidence[f"generation{generation}"] = updated
+            current = updated
+        before = len(watch.lines)
+        write_source(file, source.replace('"pid:', 'BROKEN "pid:'))
+        _, failed_index = watch.wait_for(r"error FS|FSHRDL|[Cc]ompil(?:e|ation).*fail", before)
+        alive, _ = watch.application(current["message"], failed_index + 1)
+        assert alive["pid"] == current["pid"], "A compiler error stopped the running application."
+        assert alive["count"] > current["count"], "The application stopped while the source contained an error."
+        evidence["duringCompilationError"] = alive
+        before = len(watch.lines)
+        write_source(file, source.replace("ONE", "RECOVERED"))
+        recovered, _ = watch.application(message_text("RECOVERED"), before)
+        assert_edit(alive, recovered, reload)
+        evidence["errorRecovery"] = recovered
+        current = recovered
+        if args.touch_compiler:
+            before = len(watch.lines)
+            engines = watch.engines()
+            old_hash = digest(compiler)
+            os.utime(compiler, None)
+            time.sleep(2)
+            write_source(file, source.replace("ONE", "TOUCHED"))
+            current, _ = watch.application(message_text("TOUCHED"), before)
+            assert_edit(recovered, current, reload)
+            assert watch.engines() == engines, "A compiler timestamp change restarted the watch host."
+            assert FRESH_SESSION not in "".join(watch.lines[before:]), "Identical compiler bytes triggered a fresh session."
+            assert digest(compiler) == old_hash
+            evidence["compilerTimestamp"] = {**current, "enginePids": engines, "sha256": old_hash}
+        if args.compiler_replacement:
+            replacement = args.compiler_replacement.resolve()
+            assert replacement.is_file(), "The replacement must be a real FSharp.Compiler.Service.dll."
+            replacement_hash = digest(replacement)
+            assert replacement_hash != digest(compiler), "The replacement compiler is byte-identical."
+            before = len(watch.lines)
+            engines = watch.engines()
+            with tempfile.NamedTemporaryFile(dir=compiler.parent, suffix=".dll", delete=False) as temporary:
+                temporary.write(replacement.read_bytes())
+                replacement_temp = Path(temporary.name)
+            replacement_temp.replace(compiler)
+            # A source edit also tests identity checks before the next delta.
+            write_source(file, source.replace("ONE", "NEWCOMPILER"))
+            watch.wait_for(re.escape(FRESH_SESSION), before)
+            updated, _ = watch.application(message_text("NEWCOMPILER"), before)
+            assert_edit(current, updated, False)
+            assert not set(engines) & set(watch.engines()), "The old watch host survived a compiler change."
+            evidence["compilerChange"] = {**updated, "enginePids": watch.engines(), "sha256": replacement_hash}
+            before = len(watch.lines)
+            write_source(file, source.replace("ONE", "AFTERCOMPILER"))
+            current, _ = watch.application(message_text("AFTERCOMPILER"), before)
+            assert_edit(updated, current, reload)
+            evidence["newCompilerBaseline"] = current
+        if args.next_sdk_version:
+            assert args.sdk_host and args.sdk_version, "SDK changes require an explicit host and initial SDK version."
+            before = len(watch.lines)
+            engines = watch.engines()
+            pin = project / "global.json"
+            write_source(pin, json.dumps({"sdk": {"version": args.next_sdk_version, "rollForward": "disable"}}) + "\n")
+            protected[pin] = digest(pin)
+            watch.wait_for(re.escape(FRESH_SESSION), before)
+            updated, _ = watch.application(current["message"], before, previous_pid=current["pid"])
+            assert not set(engines) & set(watch.engines()), "The old watch host survived SDK selection changes."
+            evidence["sdkChange"] = {**updated, "enginePids": watch.engines(), "version": args.next_sdk_version}
+            before = len(watch.lines)
+            write_source(file, source.replace("ONE", "NEWSDK"))
+            current, _ = watch.application(message_text("NEWSDK"), before)
+            assert_edit(updated, current, reload)
+            evidence["newSdkBaseline"] = current
+        before = len(watch.lines)
+        write_source(file, source.replace("ONE", "RESTARTED").replace("_.Message()", "_.Renamed()").replace("counter.Message()", "counter.Renamed()"))
+        restarted, _ = watch.application(message_text("RESTARTED"), before)
+        assert restarted["pid"] != current["pid"], "A method removal did not restart the application."
+        evidence["rudeEditRestart"] = restarted
+        assert "FS1063" not in "".join(watch.lines), "An unsupported compiler received the experimental flag."
+        imports = [line for line in watch.lines if "FSHARP_WATCH_EXISTING_IMPORT Sample flags=" in line]
+        assert imports, "The existing target import did not execute for the application."
+        if not reload:
+            assert all("HotReloadDeltas" not in line for line in imports), "An opt-out or unsupported compiler received the flag."
+            assert all("SupportsHotReload" not in line for line in imports), "Fallback advertised the hot reload capability."
+        for path, original in protected.items():
+            assert digest(path) == original, f"The tool changed {path}."
+        evidence["projectHashes"] = {str(path.relative_to(args.output)): value for path, value in protected.items()}
+    except BaseException as failure:
+        error = failure
+        evidence["failure"] = repr(failure)
     finally:
-        if child.poll() is None:
-            os.killpg(child.pid, signal.SIGINT)
-            try:
-                child.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait(timeout=10)
-        reader.join(timeout=5)
-        log.close()
-    assert evidence, "No application evidence was collected."
-    pids = {int(match[1]) for line in lines if (match := re.search(r"pid:(\d+) count:", line))}
-    for pid in pids:
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            continue
-        raise AssertionError(f"Application process {pid} survived cleanup.")
-    evidence["cleanup"] = {"watchExitCode": child.returncode, "applicationPidsStopped": sorted(pids)}
-    (args.output / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
+            evidence["cleanup"] = watch.close()
+        finally:
+            if original_compiler is not None:
+                compiler.write_bytes(original_compiler)
+            if mutable_compiler:
+                os.utime(compiler, ns=compiler_times)
+            (args.output / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    if error:
+        raise error
     print(json.dumps(evidence, indent=2))
 
 

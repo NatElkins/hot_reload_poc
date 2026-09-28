@@ -65,6 +65,9 @@ class Watch:
                 match = re.search(pattern, line)
                 if match:
                     return match, index
+            if not any(re.search(APPLICATION, line) for line in self.lines) and any(
+                    re.search(r"\berror (?:MSB|FS)\d+:", line) for line in self.lines):
+                raise RuntimeError(f"Startup compilation failed. See {self.output / 'watch.log'}")
             if self.child.poll() is not None:
                 raise RuntimeError(f"Watch exited with {self.child.returncode}. See {self.output / 'watch.log'}")
             time.sleep(0.1)
@@ -120,7 +123,12 @@ def assert_edit(previous, current, reload):
         assert current["pid"] != previous["pid"], "Fallback did not restart the application."
 
 
+def cancel(_signal, _frame):
+    raise KeyboardInterrupt("Acceptance was cancelled.")
+
+
 def main():
+    signal.signal(signal.SIGTERM, cancel)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", default="fsharp-watch")
     parser.add_argument("--output", type=Path, required=True)

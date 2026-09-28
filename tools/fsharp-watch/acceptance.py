@@ -4,10 +4,16 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import signal
 import sys
 
 
+def cancel(_signal, _frame):
+    raise KeyboardInterrupt("Acceptance was cancelled.")
+
+
 def main():
+    signal.signal(signal.SIGTERM, cancel)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", required=True)
     parser.add_argument("--case", action="append", help="Run only these named cases. Repeat to select several cases.")
@@ -48,10 +54,18 @@ def main():
                    "--sdk-host", str(host.resolve()), "--sdk-version", version, *options]
         print(f"Run {name}", flush=True)
         with (args.output / f"{name}.log").open("w") as log:
-            completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
-        results.append({"case": name, "exitCode": completed.returncode, "command": command})
+            child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                exit_code = child.wait()
+            except BaseException:
+                child.send_signal(signal.SIGINT)
+                child.wait(timeout=30)
+                raise
+        results.append({"case": name, "exitCode": exit_code, "command": command})
         (args.output / "matrix.json").write_text(json.dumps(results, indent=2) + "\n")
-        print(f"{name}: {'passed' if completed.returncode == 0 else 'failed'}", flush=True)
+        print(f"{name}: {'passed' if exit_code == 0 else 'failed'}", flush=True)
+        if exit_code != 0:
+            break
     failed = [result["case"] for result in results if result["exitCode"] != 0]
     if failed:
         raise SystemExit("Acceptance failed: " + ", ".join(failed))

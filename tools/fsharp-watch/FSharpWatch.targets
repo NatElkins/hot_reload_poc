@@ -1,11 +1,13 @@
 <Project>
   <Import Project="$(FSHARP_WATCH_ORIGINAL_COMMON_TARGETS)"
           Condition="'$(FSHARP_WATCH_ORIGINAL_COMMON_TARGETS)' != '' and Exists('$(FSHARP_WATCH_ORIGINAL_COMMON_TARGETS)')" />
-  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.fsproj' and '$(SupportsHotReload)' != 'false' and '$(FSHARP_WATCH_ENABLE_HOT_RELOAD)' == 'true'">
+  <Import Project="$(FSHARP_WATCH_CAPABILITIES_FILE)"
+          Condition="'$(FSHARP_WATCH_CAPABILITIES_FILE)' != '' and Exists('$(FSHARP_WATCH_CAPABILITIES_FILE)')" />
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.fsproj' and '$(SupportsHotReload)' != 'false' and '$(Optimize)' != 'true' and '$(FSHARP_WATCH_ENABLE_HOT_RELOAD)' != 'false' and '$(FSharpWatchHotReloadSupported)' == 'true'">
     <ProjectCapability Include="SupportsHotReload" />
   </ItemGroup>
   <!-- A late target preserves project flags and gives disk baselines and session compiles the same lowering. -->
-  <Target Name="FSharpWatchPrepareCompile" BeforeTargets="CoreCompile" Condition="'$(MSBuildProjectExtension)' == '.fsproj' and '$(SupportsHotReload)' != 'false' and '$(FSHARP_WATCH_ENABLE_HOT_RELOAD)' == 'true'">
+  <Target Name="FSharpWatchPrepareCompile" BeforeTargets="CoreCompile" Condition="'$(MSBuildProjectExtension)' == '.fsproj' and '$(SupportsHotReload)' != 'false' and '$(Optimize)' != 'true' and '$(FSHARP_WATCH_ENABLE_HOT_RELOAD)' != 'false' and '$(FSharpWatchHotReloadSupported)' == 'true'">
     <PropertyGroup>
       <OtherFlags>$(OtherFlags) --test:HotReloadDeltas</OtherFlags>
     </PropertyGroup>

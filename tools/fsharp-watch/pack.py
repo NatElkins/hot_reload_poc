@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Package the watch fork and a matched compiler without an SDK redistribution."""
+"""Package the watch engine. The selected SDK supplies the F# compiler."""
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,6 +12,13 @@ import zipfile
 
 def git_revision(root):
     subprocess.run(["git", "-C", str(root), "diff", "--quiet", "HEAD", "--"], check=True)
+    untracked = subprocess.check_output(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"], text=True
+    ).split("\0")
+    # Worktrees can reuse the bootstrapped SDK through an untracked .dotnet link.
+    unknown = [name for name in untracked if name and name != ".dotnet"]
+    if unknown:
+        raise RuntimeError("Commit or exclude untracked SDK files before package creation: " + ", ".join(unknown))
     return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
 
 
@@ -25,54 +31,51 @@ def copy_payload(source, destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, required=True)
-    parser.add_argument("--fsharp", type=Path, required=True)
-    parser.add_argument("--configuration", default="Debug", choices=["Debug", "Release"])
     args = parser.parse_args()
     args.sdk = args.sdk.resolve()
-    args.fsharp = args.fsharp.resolve()
-    revisions = {"sdkCommit": git_revision(args.sdk), "fsharpCommit": git_revision(args.fsharp)}
+    revisions = {"sdkCommit": git_revision(args.sdk)}
     root = Path(__file__).resolve().parent
     sdk_arguments = ["build", "src/Dotnet.Watch/dotnet-watch/dotnet-watch.csproj", "-c", "Release",
                      "-p:SdkTargetFramework=net10.0", "-v", "minimal"]
-    compiler_arguments = ["build", "src/fsc/fscProject/fsc.fsproj", "-c", args.configuration,
-                          "-p:FSharpNetCoreProductTargetFramework=net10.0", "-p:MicrosoftBuildVersion=18.7.1",
-                          "-p:MicrosoftBuildFrameworkVersion=18.7.1", "-p:MicrosoftBuildTasksCoreVersion=18.7.1",
-                          "-p:MicrosoftBuildUtilitiesCoreVersion=18.7.1", "-v", "minimal", "-m:2", "-nr:false"]
     subprocess.run([str(args.sdk / ".dotnet/dotnet"), *sdk_arguments], cwd=args.sdk, check=True)
-    subprocess.run([str(args.fsharp / ".dotnet/dotnet"), *compiler_arguments], cwd=args.fsharp,
-                   env=dict(os.environ, BUILDING_USING_DOTNET="true"), check=True)
     watch = args.sdk / "artifacts/bin/dotnet-watch/Release/net10.0"
-    compiler = args.fsharp / f"artifacts/bin/fsc/{args.configuration}/net10.0"
-    for required in [watch / "dotnet-watch.dll", compiler / "fsc.dll", compiler / "FSharp.Compiler.Service.dll"]:
-        if not required.is_file():
-            parser.error(f"Required build output is absent: {required}")
+    if not (watch / "dotnet-watch.dll").is_file():
+        parser.error(f"Required build output is absent: {watch / 'dotnet-watch.dll'}")
     payload = root / "payload"
+    # A package from the earlier preview must not retain its compiler directory.
+    if payload.exists():
+        shutil.rmtree(payload)
     copy_payload(watch, payload / "watch")
-    copy_payload(compiler, payload / "FSharp")
     licenses = payload / "licenses"
     licenses.mkdir(exist_ok=True)
-    for checkout, prefix in [(args.sdk, "sdk"), (args.fsharp, "fsharp")]:
-        for name in ["LICENSE.TXT", "LICENSE", "License.txt", "ThirdPartyNotices.txt", "THIRD-PARTY-NOTICES.TXT"]:
-            source = checkout / name
-            if source.is_file():
-                shutil.copy2(source, licenses / f"{prefix}-{name}")
+    for name in ["LICENSE.TXT", "LICENSE", "License.txt", "ThirdPartyNotices.txt", "THIRD-PARTY-NOTICES.TXT"]:
+        source = args.sdk / name
+        if source.is_file():
+            shutil.copy2(source, licenses / f"sdk-{name}")
     hashes = {
         str(path.relative_to(payload)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(payload.rglob("*")) if path.is_file() and path.name != "provenance.json"
     }
+    compiler_files = {"fsc.dll", "fsc.exe", "fsi.dll", "fsi.exe", "fsharp.compiler.service.dll", "fsharp.build.dll"}
+    if any(Path(name).name.lower() in compiler_files | {"fsharp.core.dll"} for name in hashes):
+        raise RuntimeError("The watch payload must not contain an F# compiler or build task.")
     (payload / "provenance.json").write_text(json.dumps({
         **revisions,
         "sdkBuildArguments": sdk_arguments,
-        "compilerBuildArguments": compiler_arguments,
+        "compilerOwnership": "selected-sdk",
         "targetFramework": "net10.0",
         "sha256": hashes,
     }, indent=2) + "\n")
     project = root / "FSharpWatch.fsproj"
+    # Remove obsolete copied output before the tool pack target scans the output directory.
+    subprocess.run(["dotnet", "clean", str(project), "-c", "Release", "-v", "quiet"], check=True)
     subprocess.run(["dotnet", "pack", str(project), "-c", "Release", "-o", str(root / "artifacts")], check=True)
     version = ET.parse(project).findtext("PropertyGroup/Version")
     package = root / "artifacts" / f"fsharp-watch.{version}.nupkg"
     prefix = "tools/net10.0/any/payload/"
     with zipfile.ZipFile(package) as archive:
+        if any(Path(name).name.lower() in compiler_files for name in archive.namelist()):
+            raise RuntimeError("The package contains an F# compiler or build task.")
         packaged = {name[len(prefix):] for name in archive.namelist()
                     if name.startswith(prefix) and not name.endswith("/") and name != prefix + "provenance.json"}
         if packaged != set(hashes):

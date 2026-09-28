@@ -2,12 +2,13 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+    <RollForward>Major</RollForward>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>fsharp-watch</ToolCommandName>
     <PackageId>fsharp-watch</PackageId>
-    <Version>0.1.0-preview.20260925.4</Version>
+    <Version>0.2.0-preview.20260928.1</Version>
     <Authors>Nat Elkins</Authors>
-    <Description>Experimental F# hot reload through a standalone fork of dotnet watch.</Description>
+    <Description>F# hot reload through the selected SDK compiler and a standalone watch host.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/NatElkins/hot_reload_poc</RepositoryUrl>
@@ -21,7 +22,7 @@
     <Content Include="payload/**/*" Pack="false" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
   </ItemGroup>
   <Target Name="ValidatePayload" BeforeTargets="Pack">
-    <Error Condition="!Exists('payload/watch/dotnet-watch.dll')" Text="Run pack.py with the SDK and compiler checkout paths before pack." />
-    <Error Condition="!Exists('payload/FSharp/fsc.dll')" Text="The compiler payload is absent." />
+    <Error Condition="!Exists('payload/watch/dotnet-watch.dll')" Text="Run pack.py with the SDK checkout path before pack." />
+    <Error Condition="Exists('payload/FSharp/fsc.dll')" Text="The selected SDK must supply the compiler. Remove the stale compiler payload." />
   </Target>
 </Project>

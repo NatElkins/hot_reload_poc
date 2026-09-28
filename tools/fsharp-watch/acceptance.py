@@ -23,15 +23,18 @@ def main():
     assert (args.private_host.resolve().parent / ".fsharp-watch-private-sdk").is_file(), "The private SDK marker is absent."
     smoke = Path(__file__).with_name("smoke.py")
     cases = [
-        ("stock-fallback", args.stock_host, args.stock_version, ["--expect-restart"]),
+        ("stock-fallback", args.stock_host, args.stock_version, ["--expect-restart", "--hold-preflight"]),
         ("sdk10-single", args.private_host, args.first_sdk, []),
         ("sdk10-multi", args.private_host, args.first_sdk, ["--multi-project"]),
         ("sdk11-single-identity", args.private_host, args.second_sdk,
          ["--touch-compiler", "--compiler-replacement", str(args.replacement_compiler.resolve())]),
         ("sdk11-multi", args.private_host, args.second_sdk, ["--multi-project"]),
         ("sdk-selection-change", args.private_host, args.first_sdk, ["--next-sdk-version", args.second_sdk]),
+        ("opt-out-argument", args.private_host, args.second_sdk,
+         ["--opt-out", "argument", "--hold-preflight", "--compiler-replacement", str(args.replacement_compiler.resolve()),
+          "--next-sdk-version", args.first_sdk]),
         *[(f"opt-out-{mode}", args.private_host, args.second_sdk, ["--opt-out", mode])
-          for mode in ["argument", "project", "environment", "release"]],
+          for mode in ["project", "environment", "release"]],
     ]
     results = []
     for name, host, version, options in cases:

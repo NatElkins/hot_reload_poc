@@ -7,10 +7,13 @@ import os
 from pathlib import Path
 import re
 import signal
+import shlex
+import sys
 import subprocess
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 
 APPLICATION = r"pid:(\d+) count:(\d+) message:"
@@ -126,6 +129,7 @@ def main():
     parser.add_argument("--multi-project", action="store_true")
     parser.add_argument("--expect-restart", action="store_true", help="Require fallback for a real unsupported SDK.")
     parser.add_argument("--opt-out", choices=["argument", "project", "environment", "release"])
+    parser.add_argument("--hold-preflight", action="store_true", help="Correct a source edit during a held fallback build.")
     parser.add_argument("--touch-compiler", action="store_true", help="Require identical compiler bytes to preserve the session.")
     parser.add_argument("--compiler-replacement", type=Path, help="Replace private fixture FCS with a compatible real build.")
     parser.add_argument("--next-sdk-version", help="Change global.json to another SDK in the same private installation.")
@@ -178,6 +182,23 @@ def main():
 <Message Importance="high" Text="FSHARP_WATCH_EXISTING_IMPORT $(MSBuildProjectName) flags=$(OtherFlags) capability=@(ProjectCapability)" />
 </Target></Project>
 ''')
+    preflight_gate = args.output / "preflight.hold"
+    if args.hold_preflight:
+        assert args.expect_restart or args.opt_out, "A held preflight requires restart mode."
+        helper = args.output / "hold-preflight.py"
+        helper.write_text("from pathlib import Path\nimport time\n"
+                          f"gate = Path({str(preflight_gate)!r})\n"
+                          "print('FSHARP_WATCH_PREFLIGHT_HELD', flush=True)\n"
+                          "deadline = time.monotonic() + 30\n"
+                          "while gate.exists():\n"
+                          "    if time.monotonic() >= deadline: raise TimeoutError('Preflight release did not arrive.')\n"
+                          "    time.sleep(0.05)\n")
+        document = ET.parse(sentinel)
+        target = ET.SubElement(document.getroot(), "Target", Name="FSharpWatchHoldPreflight", BeforeTargets="CoreCompile",
+                               Condition=f"'$(ArtifactsPath)' != '' and Exists('{preflight_gate}')")
+        ET.SubElement(target, "Exec", Command=shlex.join([sys.executable, str(helper)]))
+        document.write(sentinel, encoding="unicode")
+        protected[helper] = digest(helper)
     protected[sentinel] = digest(sentinel)
     env["CustomAfterMicrosoftCommonTargets"] = str(sentinel)
     if args.opt_out == "environment":
@@ -267,6 +288,20 @@ while true do
         assert_edit(alive, recovered, reload)
         evidence["errorRecovery"] = recovered
         current = recovered
+        if args.hold_preflight:
+            before = len(watch.lines)
+            preflight_gate.write_text("Wait for the correction.\n")
+            write_source(file, source.replace('"pid:', 'BROKEN "pid:'))
+            _, held_index = watch.wait_for("FSHARP_WATCH_PREFLIGHT_HELD", before)
+            alive, _ = watch.application(current["message"], held_index + 1)
+            assert alive["pid"] == current["pid"], "Preflight stopped the application before validation."
+            before = len(watch.lines)
+            write_source(file, source.replace("ONE", "CONCURRENT"))
+            preflight_gate.unlink()
+            updated, _ = watch.application(message_text("CONCURRENT"), before)
+            assert_edit(current, updated, False)
+            evidence["editDuringPreflight"] = updated
+            current = updated
         if args.touch_compiler:
             before = len(watch.lines)
             engines = watch.engines()
@@ -337,6 +372,7 @@ while true do
         error = failure
         evidence["failure"] = repr(failure)
     finally:
+        preflight_gate.unlink(missing_ok=True)
         try:
             evidence["cleanup"] = watch.close()
         finally:

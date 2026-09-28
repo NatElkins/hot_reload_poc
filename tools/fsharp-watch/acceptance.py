@@ -10,6 +10,7 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", required=True)
+    parser.add_argument("--case", action="append", help="Run only these named cases. Repeat to select several cases.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--stock-host", type=Path, required=True)
     parser.add_argument("--stock-version", default="10.0.401")
@@ -36,6 +37,11 @@ def main():
         *[(f"opt-out-{mode}", args.private_host, args.second_sdk, ["--opt-out", mode])
           for mode in ["project", "environment", "release"]],
     ]
+    if args.case:
+        unknown = set(args.case) - {case[0] for case in cases}
+        if unknown:
+            parser.error("Unknown acceptance cases: " + ", ".join(sorted(unknown)))
+        cases = [case for case in cases if case[0] in args.case]
     results = []
     for name, host, version, options in cases:
         command = [sys.executable, str(smoke), "--tool", args.tool, "--output", str(args.output / name),

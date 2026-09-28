@@ -253,8 +253,12 @@ while true do
         before = len(watch.lines)
         write_source(file, source.replace('"pid:', 'BROKEN "pid:'))
         _, failed_index = watch.wait_for(r"error FS|FSHRDL|[Cc]ompil(?:e|ation).*fail", before)
-        alive, _ = watch.application(current["message"], failed_index + 1)
-        assert alive["pid"] == current["pid"], "A compiler error stopped the running application."
+        alive, alive_index = watch.application(current["message"], failed_index + 1)
+        first_error_count = alive["count"]
+        while alive["count"] < first_error_count + 3:
+            os.kill(current["pid"], 0)
+            alive, alive_index = watch.application(current["message"], alive_index + 1)
+            assert alive["pid"] == current["pid"], "A compiler error stopped the running application."
         assert alive["count"] > current["count"], "The application stopped while the source contained an error."
         evidence["duringCompilationError"] = alive
         before = len(watch.lines)

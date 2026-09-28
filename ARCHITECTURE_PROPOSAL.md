@@ -610,3 +610,55 @@ These defaults should be revisited with stakeholders as implementation progresse
 - **Definition map and semantic edit classification**: Roslyn’s `DefinitionMap` and `SymbolChanges` capture per-symbol edit states (Added/Updated/Deleted/Rude) and drive edit diagnostics. The implemented `FSharpDefinitionMap`/`FSharpSymbolChanges` pair layers on `TypedTreeDiff`, tagging synthesized members (closures, async helpers) and exposing projection helpers consumed by future delta emit work.
 - **Synthesized type/member tracking**: reusable structures similar to `SynthesizedTypeMaps` must record anonymous types, delegates, closures, async state machines, computation expression scaffolding, and `PrivateImplementationDetails` generated in each generation.
 - **Variable slot allocator**: Roslyn’s `EncVariableSlotAllocator` maintains local slots/hoisted locals for method bodies. F# must track ILX locals (including async/state machine fields) so debugger state and metadata stay consistent across deltas; prototype a dedicated allocator to reuse slots.
+
+## Standalone watch preview (2026-09-25)
+
+The standalone `fsharp-watch` tool packages the watch prototype, matched Roslyn dependencies, and the experimental F# compiler.
+It uses the installed SDK for MSBuild and restore.
+The package contains neither an SDK nor a runtime.
+The child process selects the compiler and target import without project edits.
+
+The installed preview is `0.1.0-preview.20260925.4`.
+Both single-project and F# library/application smoke tests preserve state through two edits and compiler-error recovery.
+Method removal triggers a restart, and Ctrl+C stops the application processes.
+All 300 package payload hashes match the global installation.
+
+The SDK provider protocol remains under upstream discussion.
+The preview retains the final prototype transaction and capability fixes.
+See [the research note](notes/fsharp-watch-research-20260925.md) for source revisions, evidence, and platform limits.
+The next step is Windows and Linux verification before broader distribution.
+
+### Update (2026-09-28) - SDK-owned compiler in the watch tool
+
+Status: Implemented and verified locally.
+
+The selected SDK supplies the compiler and F# compiler service.
+The global tool supplies watch coordination and runtime transport.
+Tool and compiler versions do not require identical version numbers.
+An API probe controls experimental flags and fallback behavior.
+Initial compilation and subsequent deltas use the same SDK compiler.
+
+The installed preview is `0.2.0-preview.20260928.3`.
+Its watch engine revision is `d8af3dd4962dea7fdacbab9919a7c5454a007e84`.
+The package contains no F# compiler, compiler service, or compiler build task.
+MSBuild task isolation permits SDK and watch dependencies to coexist.
+SDK selection changes start a fresh host before project evaluation.
+Compiler content changes start a fresh session before the next update.
+
+Verification on macOS ARM64 passes:
+
+- All 36 focused bridge, reflection, identity, and file watcher tests.
+- All 11 installed-tool scenarios on stock and private SDK 10 and 11 fixtures.
+- State preservation across library/application edits and compiler-error recovery.
+- SDK selection changes, real compiler replacement, opt-outs, imports, and process cleanup.
+- All 238 payload hashes and 259 installed tool files match the archive.
+
+Fallback verifies compilation before the current application stops.
+The subsequent normal build and restart can still fail.
+The five compiler PRs remain unchanged, mergeable, and green with 55 GitHub checks and 51 Azure jobs each.
+An official SDK must distribute those compiler changes before users receive hot reload through this path.
+The package remains unpublished to NuGet.
+Windows and Linux execution remain unverified.
+
+The existing tool and watch engine draft PRs contain the changes.
+See [the SDK ownership note](notes/fsharp-watch-sdk-compiler-20260928.md) for revisions, compatibility limits, and evidence.

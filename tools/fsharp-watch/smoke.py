@@ -24,6 +24,12 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def compiler_records(text, compiler, sdk):
+    return [line for line in text.splitlines()
+            if "FSHARP_WATCH_EXISTING_IMPORT Sample flags=" in line
+            and str(compiler) in line and f"sdk={sdk}" in line]
+
+
 def write_source(path, text):
     temporary = path.with_suffix(path.suffix + ".new")
     temporary.write_text(text)
@@ -208,10 +214,22 @@ def main():
     project_file.write_text(project_text)
     protected[project_file] = digest(project_file)
     sentinel = args.output / "existing import.targets"
-    sentinel.write_text('''<Project><Target Name="FSharpWatchAcceptanceImport" BeforeTargets="CoreCompile">
-<Message Importance="high" Text="FSHARP_WATCH_EXISTING_IMPORT $(MSBuildProjectName) flags=$(OtherFlags) capability=@(ProjectCapability) compiler=$(DotnetFscCompilerPath) sdk=$(MSBuildToolsPath)" />
+    import_receipt = args.output / "import-observations.log"
+    import_receipt.unlink(missing_ok=True)
+    sentinel.write_text('''<Project><Target Name="FSharpWatchAcceptanceImport" AfterTargets="CoreCompile">
+<Message Importance="high" Text="FSHARP_WATCH_EXISTING_IMPORT $(MSBuildProjectName) flags=$(OtherFlags) capability=@(ProjectCapability, ',') compiler=$(DotnetFscCompilerPath) sdk=$(MSBuildToolsPath)" />
 </Target></Project>
 ''')
+    document = ET.parse(sentinel)
+    target = document.getroot().find("Target")
+    message_task = target.find("Message")
+    property_group = ET.Element("PropertyGroup")
+    ET.SubElement(property_group, "_FSharpWatchAcceptanceObservation").text = message_task.attrib["Text"]
+    target.insert(0, property_group)
+    message_task.set("Text", "$(_FSharpWatchAcceptanceObservation)")
+    ET.SubElement(target, "WriteLinesToFile", File=str(import_receipt),
+                  Lines="$(_FSharpWatchAcceptanceObservation)", Overwrite="false")
+    document.write(sentinel, encoding="unicode")
     preflight_gate = args.output / "preflight.hold"
     if args.hold_preflight:
         assert args.expect_restart or args.opt_out, "A held preflight requires restart mode."
@@ -279,8 +297,11 @@ while true do
 
     error = None
     try:
-        watch.wait_for("FSHARP_WATCH_EXISTING_IMPORT")
         initial, _ = watch.application(message_text("ONE"))
+        assert import_receipt.is_file(), "The existing target import did not execute."
+        initial_imports = compiler_records(import_receipt.read_text(), compiler.parent / "fsc.dll", properties["MSBuildToolsPath"])
+        assert initial_imports, "The initial build did not use the evaluated SDK compiler."
+        evidence["initialCompilerImport"] = initial_imports[-1]
         if args.expect_restart:
             watch.wait_for(r"F# hot reload unavailable:.*Edits use rebuild and restart\.")
         elif not args.opt_out:
@@ -375,6 +396,7 @@ while true do
             for action, message in [("modify", "NEWSDK"), ("delete", "UNPINNED"), ("create", "REPINNED")]:
                 before = len(watch.lines)
                 engines = watch.engines()
+                receipt_offset = len(import_receipt.read_text())
                 if action == "delete":
                     pin.unlink()
                     protected.pop(pin)
@@ -384,14 +406,16 @@ while true do
                 selected_version = subprocess.check_output([host, "--version"], cwd=project, env=env, text=True).strip()
                 selected_sdk = args.sdk_host.parent / "sdk" / selected_version
                 watch.wait_for(re.escape(FRESH_SESSION), before)
-                watch.wait_for(r"FSHARP_WATCH_EXISTING_IMPORT Sample .*sdk=" + re.escape(str(selected_sdk)), before)
                 if reload:
                     watch.wait_for(re.escape(f"F# hot reload uses SDK compiler '{selected_sdk / 'FSharp/fsc.dll'}'."), before)
                 updated, _ = watch.application(current["message"], before, previous_pid=current["pid"])
+                new_imports = compiler_records(import_receipt.read_text()[receipt_offset:], selected_sdk / "FSharp/fsc.dll", selected_sdk)
+                assert new_imports, "The restarted build did not produce a receipt for the selected SDK compiler."
                 assert not set(engines) & set(watch.engines()), "The old watch host survived SDK selection changes."
                 assert_stopped([current["pid"], *engines])
                 evidence[f"sdkInput_{action}"] = {**updated, "enginePids": watch.engines(), "version": selected_version,
-                                                 "previousApplicationStopped": current["pid"], "previousEnginesStopped": engines}
+                                                 "previousApplicationStopped": current["pid"], "previousEnginesStopped": engines,
+                                                 "newImportObservations": new_imports}
                 before = len(watch.lines)
                 write_source(file, source.replace("ONE", message))
                 current, _ = watch.application(message_text(message), before)
@@ -404,7 +428,7 @@ while true do
         assert_stopped([current["pid"]])
         evidence["rudeEditRestart"] = restarted
         assert "FS1063" not in "".join(watch.lines), "An unsupported compiler received the experimental flag."
-        imports = [line for line in watch.lines if "FSHARP_WATCH_EXISTING_IMPORT Sample flags=" in line]
+        imports = [line for line in import_receipt.read_text().splitlines() if "FSHARP_WATCH_EXISTING_IMPORT Sample flags=" in line]
         assert imports, "The existing target import did not execute for the application."
         if not reload:
             assert all("HotReloadDeltas" not in line for line in imports), "An opt-out or unsupported compiler received the flag."
@@ -412,6 +436,7 @@ while true do
         for path, original in protected.items():
             assert digest(path) == original, f"The tool changed {path}."
         evidence["projectHashes"] = {str(path.relative_to(args.output)): value for path, value in protected.items()}
+        evidence["importObservations"] = imports
     except BaseException as failure:
         error = failure
         evidence["failure"] = repr(failure)

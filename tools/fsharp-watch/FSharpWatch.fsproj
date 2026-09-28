@@ -6,7 +6,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>fsharp-watch</ToolCommandName>
     <PackageId>fsharp-watch</PackageId>
-    <Version>0.2.0-preview.20260928.1</Version>
+    <Version>0.2.0-preview.20260928.2</Version>
     <Authors>Nat Elkins</Authors>
     <Description>F# hot reload through the selected SDK compiler and a standalone watch host.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

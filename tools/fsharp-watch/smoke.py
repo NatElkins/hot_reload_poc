@@ -115,12 +115,27 @@ class Watch:
                 "applicationPidsStopped": sorted(app_pids)}
 
 
+def assert_stopped(pids):
+    remaining = set(pids)
+    deadline = time.monotonic() + 5
+    while remaining and time.monotonic() < deadline:
+        for pid in tuple(remaining):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                remaining.remove(pid)
+        if remaining:
+            time.sleep(0.1)
+    assert not remaining, f"Old processes remain alive after restart: {sorted(remaining)}"
+
+
 def assert_edit(previous, current, reload):
     if reload:
         assert current["pid"] == previous["pid"], "A body edit restarted the application."
         assert current["count"] > previous["count"], "The application state did not survive."
     else:
         assert current["pid"] != previous["pid"], "Fallback did not restart the application."
+        assert_stopped([previous["pid"]])
 
 
 def cancel(_signal, _frame):
@@ -160,6 +175,11 @@ def main():
         env["PATH"] = str(args.sdk_host.parent) + os.pathsep + env.get("PATH", "")
     host = str(args.sdk_host or env.get("DOTNET_HOST_PATH", "dotnet"))
     protected = {}
+    if args.next_sdk_version:
+        assert args.sdk_version, "SDK changes require an initial SDK version."
+        ancestor_pin = args.output / "global.json"
+        ancestor_pin.write_text(json.dumps({"sdk": {"version": args.sdk_version, "rollForward": "disable"}}) + "\n")
+        protected[ancestor_pin] = digest(ancestor_pin)
     if args.sdk_version:
         pin = project / "global.json"
         pin.write_text(json.dumps({"sdk": {"version": args.sdk_version, "rollForward": "disable"}}) + "\n")
@@ -189,7 +209,7 @@ def main():
     protected[project_file] = digest(project_file)
     sentinel = args.output / "existing import.targets"
     sentinel.write_text('''<Project><Target Name="FSharpWatchAcceptanceImport" BeforeTargets="CoreCompile">
-<Message Importance="high" Text="FSHARP_WATCH_EXISTING_IMPORT $(MSBuildProjectName) flags=$(OtherFlags) capability=@(ProjectCapability)" />
+<Message Importance="high" Text="FSHARP_WATCH_EXISTING_IMPORT $(MSBuildProjectName) flags=$(OtherFlags) capability=@(ProjectCapability) compiler=$(DotnetFscCompilerPath) sdk=$(MSBuildToolsPath)" />
 </Target></Project>
 ''')
     preflight_gate = args.output / "preflight.hold"
@@ -342,6 +362,7 @@ while true do
             updated, _ = watch.application(message_text("NEWCOMPILER"), before)
             assert_edit(current, updated, False)
             assert not set(engines) & set(watch.engines()), "The old watch host survived a compiler change."
+            assert_stopped(engines)
             evidence["compilerChange"] = {**updated, "enginePids": watch.engines(), "sha256": replacement_hash}
             before = len(watch.lines)
             write_source(file, source.replace("ONE", "AFTERCOMPILER"))
@@ -350,24 +371,37 @@ while true do
             evidence["newCompilerBaseline"] = current
         if args.next_sdk_version:
             assert args.sdk_host and args.sdk_version, "SDK changes require an explicit host and initial SDK version."
-            before = len(watch.lines)
-            engines = watch.engines()
             pin = project / "global.json"
-            write_source(pin, json.dumps({"sdk": {"version": args.next_sdk_version, "rollForward": "disable"}}) + "\n")
-            protected[pin] = digest(pin)
-            watch.wait_for(re.escape(FRESH_SESSION), before)
-            updated, _ = watch.application(current["message"], before, previous_pid=current["pid"])
-            assert not set(engines) & set(watch.engines()), "The old watch host survived SDK selection changes."
-            evidence["sdkChange"] = {**updated, "enginePids": watch.engines(), "version": args.next_sdk_version}
-            before = len(watch.lines)
-            write_source(file, source.replace("ONE", "NEWSDK"))
-            current, _ = watch.application(message_text("NEWSDK"), before)
-            assert_edit(updated, current, reload)
-            evidence["newSdkBaseline"] = current
+            for action, message in [("modify", "NEWSDK"), ("delete", "UNPINNED"), ("create", "REPINNED")]:
+                before = len(watch.lines)
+                engines = watch.engines()
+                if action == "delete":
+                    pin.unlink()
+                    protected.pop(pin)
+                else:
+                    write_source(pin, json.dumps({"sdk": {"version": args.next_sdk_version, "rollForward": "disable"}}) + "\n")
+                    protected[pin] = digest(pin)
+                selected_version = subprocess.check_output([host, "--version"], cwd=project, env=env, text=True).strip()
+                selected_sdk = args.sdk_host.parent / "sdk" / selected_version
+                watch.wait_for(re.escape(FRESH_SESSION), before)
+                watch.wait_for(r"FSHARP_WATCH_EXISTING_IMPORT Sample .*sdk=" + re.escape(str(selected_sdk)), before)
+                if reload:
+                    watch.wait_for(re.escape(f"F# hot reload uses SDK compiler '{selected_sdk / 'FSharp/fsc.dll'}'."), before)
+                updated, _ = watch.application(current["message"], before, previous_pid=current["pid"])
+                assert not set(engines) & set(watch.engines()), "The old watch host survived SDK selection changes."
+                assert_stopped([current["pid"], *engines])
+                evidence[f"sdkInput_{action}"] = {**updated, "enginePids": watch.engines(), "version": selected_version,
+                                                 "previousApplicationStopped": current["pid"], "previousEnginesStopped": engines}
+                before = len(watch.lines)
+                write_source(file, source.replace("ONE", message))
+                current, _ = watch.application(message_text(message), before)
+                assert_edit(updated, current, reload)
+                evidence[f"sdkInput_{action}_nextUpdate"] = current
         before = len(watch.lines)
         write_source(file, source.replace("ONE", "RESTARTED").replace("_.Message()", "_.Renamed()").replace("counter.Message()", "counter.Renamed()"))
         restarted, _ = watch.application(message_text("RESTARTED"), before)
         assert restarted["pid"] != current["pid"], "A method removal did not restart the application."
+        assert_stopped([current["pid"]])
         evidence["rudeEditRestart"] = restarted
         assert "FS1063" not in "".join(watch.lines), "An unsupported compiler received the experimental flag."
         imports = [line for line in watch.lines if "FSHARP_WATCH_EXISTING_IMPORT Sample flags=" in line]

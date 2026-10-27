@@ -111,7 +111,6 @@ jobs:
         if: runner.os == 'Windows'
         run: python tools/fsharp-watch/portable_smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch.exe" --expect-restart --output "$RUNNER_TEMP/acceptance/stock"
       - name: Read compiler fixture source
-        if: runner.os != 'Windows'
         id: compiler
         run: |
           python3 - <<'PY'
@@ -122,7 +121,6 @@ jobs:
               print('commit=' + source['commit'], file=output)
           PY
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: runner.os != 'Windows'
         with:
           repository: ${{ steps.compiler.outputs.repository }}
           ref: ${{ steps.compiler.outputs.commit }}
@@ -138,6 +136,18 @@ jobs:
           ./eng/common/dotnet.sh --info
           mkdir -p artifacts/packages/Release/Shipping artifacts/packages/Release/NonShipping
           ./.dotnet/dotnet build src/fsc/fscProject/fsc.fsproj -c Release -v minimal
+      - name: Build fixture compiler on Windows
+        if: runner.os == 'Windows'
+        working-directory: .sources/fsharp
+        shell: pwsh
+        env:
+          BUILDING_USING_DOTNET: 'true'
+          FSHARPCORE_USE_PACKAGE: 'false'
+        run: |
+          & ./eng/common/dotnet.ps1 --info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force artifacts/packages/Release/Shipping, artifacts/packages/Release/NonShipping | Out-Null
+          & ./.dotnet/dotnet.exe build src/fsc/fscProject/fsc.fsproj -c Release -v minimal
       - name: Verify installed hot reload and state preservation
         if: runner.os != 'Windows'
         run: |
@@ -146,6 +156,18 @@ jobs:
           python3 tools/fsharp-watch/fixture.py --sdk-root .sources/fsharp/.dotnet --sdk-version "$sdk_version" --compiler-output ".sources/fsharp/artifacts/bin/fsc/Release/$compiler_framework" --output "$RUNNER_TEMP/private-sdk"
           python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --sdk-host "$RUNNER_TEMP/private-sdk/dotnet" --sdk-version "$sdk_version" --framework "$compiler_framework" --output "$RUNNER_TEMP/acceptance/hot-reload"
           python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --sdk-host "$RUNNER_TEMP/private-sdk/dotnet" --sdk-version "$sdk_version" --framework "$compiler_framework" --multi-project --output "$RUNNER_TEMP/acceptance/multi-project"
+      - name: Verify Windows hot reload and state preservation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $sdkVersion = & .sources/fsharp/.dotnet/dotnet.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $compilerFramework = & .sources/fsharp/.dotnet/dotnet.exe msbuild .sources/fsharp/src/fsc/fscProject/fsc.fsproj -p:BUILDING_USING_DOTNET=true -getProperty:FSharpNetCoreProductTargetFramework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fsharp-watch/fixture.py --sdk-root .sources/fsharp/.dotnet --sdk-version $sdkVersion --compiler-output ".sources/fsharp/artifacts/bin/fsc/Release/$compilerFramework" --output "$env:RUNNER_TEMP/private-sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fsharp-watch/portable_smoke.py --tool "$env:RUNNER_TEMP/watch-tool/fsharp-watch.exe" --sdk-host "$env:RUNNER_TEMP/private-sdk/dotnet.exe" --sdk-version $sdkVersion --framework $compilerFramework --output "$env:RUNNER_TEMP/acceptance/hot-reload"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

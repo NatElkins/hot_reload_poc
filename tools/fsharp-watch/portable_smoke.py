@@ -12,7 +12,37 @@ import subprocess
 import threading
 import time
 
-from smoke import APPLICATION, Watch, assert_edit, write_source
+from smoke import APPLICATION, Watch, write_source
+
+
+def assert_stopped(watch, pids, timeout=5):
+    """Verify process exit without use of POSIX signals on Windows."""
+    def alive(pid):
+        if isinstance(watch, WindowsWatch):
+            return watch.job.alive(pid)
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    remaining = set(pids)
+    deadline = time.monotonic() + timeout
+    while remaining and time.monotonic() < deadline:
+        remaining = {pid for pid in remaining if alive(pid)}
+        if remaining:
+            time.sleep(0.1)
+    assert not remaining, f"Old processes remain alive after restart: {sorted(remaining)}"
+
+
+def assert_edit(watch, previous, current, reload):
+    """Verify retained state or replacement process according to the expected mode."""
+    if reload:
+        assert current["pid"] == previous["pid"], "A body edit restarted the application."
+        assert current["count"] > previous["count"], "The application state did not survive."
+    else:
+        assert current["pid"] != previous["pid"], "Fallback did not restart the application."
+        assert_stopped(watch, [previous["pid"]])
 
 
 class WindowsJob:
@@ -43,6 +73,7 @@ class WindowsJob:
         self.kernel.OpenProcess.restype = wintypes.HANDLE
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.kernel.WaitForSingleObject.restype = wintypes.DWORD
         self.handle = self.kernel.CreateJobObjectW(None, None)
         if not self.handle:
             raise ctypes.WinError(ctypes.get_last_error())
@@ -71,7 +102,10 @@ class WindowsJob:
                 return False
             raise ctypes.WinError(error)
         try:
-            return self.kernel.WaitForSingleObject(handle, 0) == 258
+            result = self.kernel.WaitForSingleObject(handle, 0)
+            if result == 0xFFFFFFFF:
+                raise ctypes.WinError(ctypes.get_last_error())
+            return result == 258
         finally:
             self.kernel.CloseHandle(handle)
 
@@ -107,22 +141,18 @@ class WindowsWatch(Watch):
         forced = False
         try:
             if self.child.poll() is None:
-                self.child.send_signal(signal.CTRL_BREAK_EVENT)
                 try:
+                    self.child.send_signal(signal.CTRL_BREAK_EVENT)
                     self.child.wait(timeout=15)
-                except subprocess.TimeoutExpired:
+                except (OSError, subprocess.TimeoutExpired):
+                    # A headless Windows runner can lack a console for CTRL_BREAK_EVENT.
                     forced = True
         finally:
             self.job.close()
             self.child.wait(timeout=10)
             self.reader.join(timeout=10)
             self.log.close()
-        deadline = time.monotonic() + 5
-        remaining = pids
-        while remaining and time.monotonic() < deadline:
-            remaining = {pid for pid in remaining if self.job.alive(pid)}
-            time.sleep(0.1)
-        assert not remaining, f"Application processes survived cleanup: {sorted(remaining)}"
+        assert_stopped(self, pids)
         return {"watchExitCode": self.child.returncode, "applicationPidsStopped": sorted(pids),
                 "forcedTreeCleanup": forced}
 
@@ -188,7 +218,7 @@ while true do
             start = len(watch.lines)
             write_source(source_file, source.replace("ONE", message))
             updated, _ = watch.application(message, start)
-            assert_edit(current, updated, not args.expect_restart)
+            assert_edit(watch, current, updated, not args.expect_restart)
             evidence[message] = updated
             current = updated
         start = len(watch.lines)
@@ -203,12 +233,13 @@ while true do
         start = len(watch.lines)
         write_source(source_file, source.replace("ONE", "RECOVERED"))
         recovered, _ = watch.application("RECOVERED", start)
-        assert_edit(alive, recovered, not args.expect_restart)
+        assert_edit(watch, alive, recovered, not args.expect_restart)
         evidence["errorRecovery"] = recovered
         start = len(watch.lines)
         write_source(source_file, source.replace("ONE", "RESTARTED").replace("Message()", "Renamed()"))
         restarted, _ = watch.application("RESTARTED", start)
         assert restarted["pid"] != recovered["pid"], "A method removal did not restart the application."
+        assert_stopped(watch, [recovered["pid"]])
         evidence["rudeEditRestart"] = restarted
         assert "FS1063" not in "".join(watch.lines), "The compiler rejected an experimental flag."
         assert hashlib.sha256(project_file.read_bytes()).hexdigest() == project_hash, "The tool changed the project."

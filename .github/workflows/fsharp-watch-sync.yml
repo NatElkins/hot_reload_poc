@@ -1,0 +1,87 @@
+name: Update F# watch source pins
+
+on:
+  schedule:
+    - cron: '37 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fsharp-watch-source-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'NatElkins/hot_reload_poc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_BRANCH: main
+      SYNC_BRANCH: sync/fsharp-watch-source
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preserve the current update branch
+        id: branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin "$SYNC_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/$SYNC_BRANCH:refs/remotes/origin/$SYNC_BRANCH"
+            before=$(git rev-parse "origin/$SYNC_BRANCH")
+            git switch -c "$SYNC_BRANCH" "origin/$SYNC_BRANCH"
+            if ! git merge --no-edit "origin/$BASE_BRANCH"; then
+              echo 'The source update branch conflicts with main. Resolve that branch before another update.' >> "$GITHUB_STEP_SUMMARY"
+              git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            if test "$before" != "$(git rev-parse HEAD)"; then
+              echo 'changed=true' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            git switch -c "$SYNC_BRANCH"
+          fi
+
+      - name: Resolve immutable source revisions
+        id: source
+        run: python3 tools/fsharp-watch/sync.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Create or update the source PR
+        if: steps.source.outputs.changed == 'true' || steps.branch.outputs.changed == 'true'
+        env:
+          SOURCE_CHANGED: ${{ steps.source.outputs.changed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test "$SOURCE_CHANGED" = true; then
+            git add tools/fsharp-watch/sdk-source.json
+            git commit -m 'Update F# watch source revisions'
+          fi
+          git push origin "HEAD:refs/heads/$SYNC_BRANCH"
+          if git diff --quiet "origin/$BASE_BRANCH...HEAD"; then
+            exit 0
+          fi
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if test -z "$existing"; then
+            cat > "$RUNNER_TEMP/fsharp-watch-source-pr.md" <<'BODY'
+          This updates the watch engine and compiler fixture to descendant source revisions.
+          The SDK upstream revision records source already present in the engine.
+
+          Package CI verifies the installed tool before release.
+          BODY
+            gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$SYNC_BRANCH" --draft --title 'Update F# watch source revisions' --body-file "$RUNNER_TEMP/fsharp-watch-source-pr.md"
+          fi
+          # A token-generated push does not automatically start another workflow.
+          gh workflow run fsharp-watch-ci.yml --repo "$GITHUB_REPOSITORY" --ref "$SYNC_BRANCH"

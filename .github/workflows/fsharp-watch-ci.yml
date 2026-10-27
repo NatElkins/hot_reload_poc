@@ -1,0 +1,176 @@
+name: F# watch verification
+
+on:
+  pull_request:
+    paths: ['tools/fsharp-watch/**', '.github/workflows/fsharp-watch-*.yml']
+  push:
+    branches: [feature/fsharp-watch]
+    paths: ['tools/fsharp-watch/**', '.github/workflows/fsharp-watch-*.yml']
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        description: Version of the verified package
+        value: ${{ jobs.package.outputs.version }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fsharp-watch-verify-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Read immutable engine source
+        id: source
+        run: |
+          python3 - <<'PY'
+          import json, os
+          source = json.load(open('tools/fsharp-watch/sdk-source.json'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('repository=' + source['repository'], file=output)
+              print('commit=' + source['commit'], file=output)
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ steps.source.outputs.commit }}
+          path: .sources/sdk
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bootstrap engine build SDK
+        working-directory: .sources/sdk
+        run: ./eng/common/dotnet.sh --info
+      - name: Verify automation
+        run: python3 -m unittest discover -s tools/fsharp-watch -p 'test_*.py'
+      - name: Select unique preview version
+        id: version
+        run: echo "value=0.2.0-preview.$(date -u +%Y%m%d).${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Build and verify package
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        run: python3 tools/fsharp-watch/pack.py --sdk .sources/sdk --version "$PACKAGE_VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fsharp-watch-package
+          path: tools/fsharp-watch/artifacts/*.nupkg
+          if-no-files-found: error
+
+  installed-tool:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fsharp-watch-package
+          path: package
+      - name: Install the exact package
+        env:
+          PACKAGE_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          dotnet tool install fsharp-watch --tool-path "$RUNNER_TEMP/watch-tool" --add-source "$PWD/package" --version "$PACKAGE_VERSION" --no-cache
+          "$RUNNER_TEMP/watch-tool/fsharp-watch" --version
+          "$RUNNER_TEMP/watch-tool/fsharp-watch" --tool-info
+          "$RUNNER_TEMP/watch-tool/fsharp-watch" --help
+      - name: Verify stock SDK fallback
+        if: runner.os != 'Windows'
+        run: python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --expect-restart --hold-preflight --output "$RUNNER_TEMP/acceptance/stock"
+      - name: Verify Windows edits and compiler-error recovery
+        if: runner.os == 'Windows'
+        run: python tools/fsharp-watch/portable_smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch.exe" --expect-restart --output "$RUNNER_TEMP/acceptance/stock"
+      - name: Read compiler fixture source
+        id: compiler
+        run: |
+          python3 - <<'PY'
+          import json, os
+          source = json.load(open('tools/fsharp-watch/sdk-source.json'))['compilerFixture']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('repository=' + source['repository'], file=output)
+              print('commit=' + source['commit'], file=output)
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.compiler.outputs.repository }}
+          ref: ${{ steps.compiler.outputs.commit }}
+          path: .sources/fsharp
+          persist-credentials: false
+      - name: Build fixture compiler
+        if: runner.os != 'Windows'
+        working-directory: .sources/fsharp
+        env:
+          BUILDING_USING_DOTNET: 'true'
+          FSHARPCORE_USE_PACKAGE: 'false'
+        run: |
+          ./eng/common/dotnet.sh --info
+          mkdir -p artifacts/packages/Release/Shipping artifacts/packages/Release/NonShipping
+          ./.dotnet/dotnet build src/fsc/fscProject/fsc.fsproj -c Release -v minimal
+      - name: Build fixture compiler on Windows
+        if: runner.os == 'Windows'
+        working-directory: .sources/fsharp
+        shell: pwsh
+        env:
+          BUILDING_USING_DOTNET: 'true'
+          FSHARPCORE_USE_PACKAGE: 'false'
+        run: |
+          & ./eng/common/dotnet.ps1 --info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force artifacts/packages/Release/Shipping, artifacts/packages/Release/NonShipping | Out-Null
+          & ./.dotnet/dotnet.exe build src/fsc/fscProject/fsc.fsproj -c Release -v minimal
+      - name: Verify installed hot reload and state preservation
+        if: runner.os != 'Windows'
+        run: |
+          sdk_version=$(.sources/fsharp/.dotnet/dotnet --version)
+          compiler_framework=$(.sources/fsharp/.dotnet/dotnet msbuild .sources/fsharp/src/fsc/fscProject/fsc.fsproj -p:BUILDING_USING_DOTNET=true -getProperty:FSharpNetCoreProductTargetFramework)
+          python3 tools/fsharp-watch/fixture.py --sdk-root .sources/fsharp/.dotnet --sdk-version "$sdk_version" --compiler-output ".sources/fsharp/artifacts/bin/fsc/Release/$compiler_framework" --output "$RUNNER_TEMP/private-sdk"
+          python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --sdk-host "$RUNNER_TEMP/private-sdk/dotnet" --sdk-version "$sdk_version" --framework "$compiler_framework" --output "$RUNNER_TEMP/acceptance/hot-reload"
+          python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --sdk-host "$RUNNER_TEMP/private-sdk/dotnet" --sdk-version "$sdk_version" --framework "$compiler_framework" --multi-project --output "$RUNNER_TEMP/acceptance/multi-project"
+      - name: Verify Windows hot reload and state preservation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $sdkVersion = & .sources/fsharp/.dotnet/dotnet.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $compilerFramework = & .sources/fsharp/.dotnet/dotnet.exe msbuild .sources/fsharp/src/fsc/fscProject/fsc.fsproj -p:BUILDING_USING_DOTNET=true -getProperty:FSharpNetCoreProductTargetFramework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fsharp-watch/fixture.py --sdk-root .sources/fsharp/.dotnet --sdk-version $sdkVersion --compiler-output ".sources/fsharp/artifacts/bin/fsc/Release/$compilerFramework" --output "$env:RUNNER_TEMP/private-sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fsharp-watch/portable_smoke.py --tool "$env:RUNNER_TEMP/watch-tool/fsharp-watch.exe" --sdk-host "$env:RUNNER_TEMP/private-sdk/dotnet.exe" --sdk-version $sdkVersion --framework $compilerFramework --output "$env:RUNNER_TEMP/acceptance/hot-reload"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: watch-acceptance-${{ runner.os }}
+          path: ${{ runner.temp }}/acceptance
+          if-no-files-found: ignore

@@ -1,5 +1,29 @@
 # F# Hot Reload Architecture Proposal
 
+## October 2026 maintenance
+
+All five controlled compiler PRs now include F# main `fe180deb55`.
+The external watch engine now includes SDK main `082c56168c` and targets `net10.0`.
+The tool remains `fsharp-watch`, and the selected SDK supplies the compiler and compiler service.
+The package pins an immutable SDK engine revision and records its incorporated upstream revision.
+Separate weekly workflows propose SDK merges and package source updates.
+The release workflow publishes the same archive that CI installs and verifies on Linux, macOS, and Windows.
+
+Nelknet owns the configured NuGet trusted publisher policy.
+The release job exchanges its GitHub identity for a short-lived push credential.
+The repository stores no NuGet API key.
+The policy permits only `fsharp-watch` publication from the `nuget` environment.
+That environment accepts only `main`.
+
+Private compiler fixtures remain necessary until an official SDK supplies the hot reload session API.
+Stock SDKs without that API retain rebuild and restart behavior.
+The package contains no replacement compiler or compiler service.
+
+Compiler review fixed cross-project capture leakage, omitted runtime-async lowering, and incorrect delta parameter metadata.
+The compiler verifier passed all 11 steps, including complete metadata inspection and runtime updates.
+Release EmittedIL passed 1,660 tests with three existing skips.
+Maintainer review and exact-head hosted CI remain separate requirements for upstream merges.
+
 ## 1. Context and Goals
 
 - **Objective**: deliver parity-level Edit and Continue (EnC) and Hot Reload for F# comparable to the C# experience implemented in Roslyn (`roslyn/src/Features/Core/Portable/EditAndContinue`).
@@ -610,3 +634,55 @@ These defaults should be revisited with stakeholders as implementation progresse
 - **Definition map and semantic edit classification**: Roslyn’s `DefinitionMap` and `SymbolChanges` capture per-symbol edit states (Added/Updated/Deleted/Rude) and drive edit diagnostics. The implemented `FSharpDefinitionMap`/`FSharpSymbolChanges` pair layers on `TypedTreeDiff`, tagging synthesized members (closures, async helpers) and exposing projection helpers consumed by future delta emit work.
 - **Synthesized type/member tracking**: reusable structures similar to `SynthesizedTypeMaps` must record anonymous types, delegates, closures, async state machines, computation expression scaffolding, and `PrivateImplementationDetails` generated in each generation.
 - **Variable slot allocator**: Roslyn’s `EncVariableSlotAllocator` maintains local slots/hoisted locals for method bodies. F# must track ILX locals (including async/state machine fields) so debugger state and metadata stay consistent across deltas; prototype a dedicated allocator to reuse slots.
+
+## Standalone watch preview (2026-09-25)
+
+The standalone `fsharp-watch` tool packages the watch prototype, matched Roslyn dependencies, and the experimental F# compiler.
+It uses the installed SDK for MSBuild and restore.
+The package contains neither an SDK nor a runtime.
+The child process selects the compiler and target import without project edits.
+
+The installed preview is `0.1.0-preview.20260925.4`.
+Both single-project and F# library/application smoke tests preserve state through two edits and compiler-error recovery.
+Method removal triggers a restart, and Ctrl+C stops the application processes.
+All 300 package payload hashes match the global installation.
+
+The SDK provider protocol remains under upstream discussion.
+The preview retains the final prototype transaction and capability fixes.
+See [the research note](notes/fsharp-watch-research-20260925.md) for source revisions, evidence, and platform limits.
+The next step is Windows and Linux verification before broader distribution.
+
+### Update (2026-09-28) - SDK-owned compiler in the watch tool
+
+Status: Implemented and verified locally.
+
+The selected SDK supplies the compiler and F# compiler service.
+The global tool supplies watch coordination and runtime transport.
+Tool and compiler versions do not require identical version numbers.
+An API probe controls experimental flags and fallback behavior.
+Initial compilation and subsequent deltas use the same SDK compiler.
+
+The installed preview is `0.2.0-preview.20260928.3`.
+Its watch engine revision is `d8af3dd4962dea7fdacbab9919a7c5454a007e84`.
+The package contains no F# compiler, compiler service, or compiler build task.
+MSBuild task isolation permits SDK and watch dependencies to coexist.
+SDK selection changes start a fresh host before project evaluation.
+Compiler content changes start a fresh session before the next update.
+
+Verification on macOS ARM64 passes:
+
+- All 36 focused bridge, reflection, identity, and file watcher tests.
+- All 11 installed-tool scenarios on stock and private SDK 10 and 11 fixtures.
+- State preservation across library/application edits and compiler-error recovery.
+- SDK selection changes, real compiler replacement, opt-outs, imports, and process cleanup.
+- All 238 payload hashes and 259 installed tool files match the archive.
+
+Fallback verifies compilation before the current application stops.
+The subsequent normal build and restart can still fail.
+The five compiler PRs remain unchanged, mergeable, and green with 55 GitHub checks and 51 Azure jobs each.
+An official SDK must distribute those compiler changes before users receive hot reload through this path.
+The package remains unpublished to NuGet.
+Windows and Linux execution remain unverified.
+
+The existing tool and watch engine draft PRs contain the changes.
+See [the SDK ownership note](notes/fsharp-watch-sdk-compiler-20260928.md) for revisions, compatibility limits, and evidence.

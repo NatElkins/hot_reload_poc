@@ -2,15 +2,32 @@
 
 ## October 2026 maintenance
 
-- Preserve the existing dirty compiler, SDK, and workspace checkouts. The audit snapshot records their initial state.
-- Refresh the five compiler PRs against current F# main. Verify review regressions and current CI results.
-- Port the external watch engine to the current SDK watch components. Preserve support for a selected SDK compiler.
-- Add immutable source pins, weekly update PRs, installed package verification, and NuGet trusted publishing.
-- Publish the verified preview under Nelknet after the release gate passes.
+The original dirty compiler, SDK, and workspace checkouts remain preserved.
+Five refreshed compiler branches include current F# main, and both SDK branches include current SDK main.
+The standalone tool uses immutable source pins, weekly update PRs, installed-package verification, and NuGet trusted publishing.
 
-The source-update and fixture-isolation unit tests pass locally. Remote package verification remains pending.
-The SDK engine now compiles for `net10.0` with scoped MSBuild compile references.
-Compiler regression tests and SDK integration tests remain in progress.
+Local verification passed:
+
+- Each compiler slice passed its build, applicable HotReload suites, surface-area test, and formatting check.
+- The umbrella passed all 11 verifier steps, 593 service tests, 255 component tests, and 29 strict metadata tests.
+- Release EmittedIL passed 1,660 tests, with zero failures and three existing skips.
+- The SDK engine passed 60 focused tests locally and in hosted CI.
+- Package support scripts passed 16 unit tests.
+- Installed package checks passed stock-SDK fallback, private-compiler hot reload, multi-project edits, SDK selection, and opt-outs.
+
+Package CI verifies one archive on Linux, macOS, and Windows.
+The final run uses compiler fixture `413be4377c` and SDK engine `8eac7414d8`.
+The release workflow repeats those checks on `main` before it publishes that archive under Nelknet.
+The NuGet policy and GitHub environment are configured.
+The SDK sync schedule is active on its default branch.
+The package sync schedule activates when this PR reaches `main`.
+
+Follow-up actions:
+
+- Verify terminal hosted results against each final compiler head.
+- Merge the tool PR after its verification gate passes.
+- Verify the first NuGet publication and installation from the public feed.
+- Complete upstream maintainer review before the compiler PRs merge.
 
 This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. Each task is scoped so that a single LLM-focused iteration can complete it while keeping the repository in a buildable, backwards-compatible state. After every task, run the full build (`dotnet build FSharp.sln` or `build.cmd`) and applicable test suites. Complete outstanding work in earlier milestones before tackling later items—e.g., finish the Task 2.x synthesized-name/metadata plumbing prior to expanding tooling scenarios in Milestone 3.
 

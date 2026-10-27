@@ -7,6 +7,20 @@ The current directory determines SDK selection, including `global.json`, as it d
 The engine requires a compatible installed .NET runtime and ASP.NET Core runtime, version 10 or later.
 The tool selects a runtime that also satisfies the selected SDK.
 
+## Install the preview
+
+Install the latest preview from NuGet.
+
+```sh
+dotnet tool install --global fsharp-watch --prerelease
+```
+
+If the tool is already installed, update it.
+
+```sh
+dotnet tool update --global fsharp-watch --prerelease
+```
+
 ## Run a project
 
 ```sh
@@ -94,7 +108,8 @@ It rejects rewritten source history and preserves existing update branches.
 Both workflows require their definitions on the repository default branch before schedules become active.
 
 Package CI builds one archive on Linux and installs that archive on Linux, macOS, and Windows.
-Linux and macOS run stock-SDK fallback and private-compiler hot reload scenarios.
+All three platforms run stock-SDK fallback and private-compiler hot reload scenarios.
+Linux and macOS also run multi-project scenarios.
 The fixture copies the compiler and matching build task into a separate SDK installation.
 It never replaces the user's compiler.
 

@@ -2,15 +2,27 @@
 
 ## October 2026 maintenance
 
-The compiler PRs and standalone watch engine require fresh integration with current upstream source.
+All five controlled compiler PRs now include F# main `fe180deb55`.
+The external watch engine now includes SDK main `082c56168c` and targets `net10.0`.
 The tool remains `fsharp-watch`, and the selected SDK supplies the compiler and compiler service.
 The package pins an immutable SDK engine revision and records its incorporated upstream revision.
-Separate sync workflows propose SDK merges and package source updates.
-The release workflow publishes the same archive that CI installs and verifies.
-Nelknet is the intended NuGet package owner.
-Trusted publishing replaces a stored NuGet API key.
+Separate weekly workflows propose SDK merges and package source updates.
+The release workflow publishes the same archive that CI installs and verifies on Linux, macOS, and Windows.
+
+Nelknet owns the configured NuGet trusted publisher policy.
+The release job exchanges its GitHub identity for a short-lived push credential.
+The repository stores no NuGet API key.
+The policy permits only `fsharp-watch` publication from the `nuget` environment.
+That environment accepts only `main`.
+
 Private compiler fixtures remain necessary until an official SDK supplies the hot reload session API.
-Implementation and remote CI verification are in progress.
+Stock SDKs without that API retain rebuild and restart behavior.
+The package contains no replacement compiler or compiler service.
+
+Compiler review fixed cross-project capture leakage, omitted runtime-async lowering, and incorrect delta parameter metadata.
+The compiler verifier passed all 11 steps, including complete metadata inspection and runtime updates.
+Release EmittedIL passed 1,660 tests with three existing skips.
+Maintainer review and exact-head hosted CI remain separate requirements for upstream merges.
 
 ## 1. Context and Goals
 

@@ -131,6 +131,9 @@ jobs:
       - name: Build fixture compiler
         if: runner.os != 'Windows'
         working-directory: .sources/fsharp
+        env:
+          BUILDING_USING_DOTNET: 'true'
+          FSHARPCORE_USE_PACKAGE: 'false'
         run: |
           ./eng/common/dotnet.sh --info
           mkdir -p artifacts/packages/Release/Shipping artifacts/packages/Release/NonShipping
@@ -139,7 +142,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           sdk_version=$(.sources/fsharp/.dotnet/dotnet --version)
-          compiler_framework=$(.sources/fsharp/.dotnet/dotnet msbuild .sources/fsharp/src/fsc/fscProject/fsc.fsproj -getProperty:TargetFramework)
+          compiler_framework=$(.sources/fsharp/.dotnet/dotnet msbuild .sources/fsharp/src/fsc/fscProject/fsc.fsproj -p:BUILDING_USING_DOTNET=true -getProperty:FSharpNetCoreProductTargetFramework)
           python3 tools/fsharp-watch/fixture.py --sdk-root .sources/fsharp/.dotnet --sdk-version "$sdk_version" --compiler-output ".sources/fsharp/artifacts/bin/fsc/Release/$compiler_framework" --output "$RUNNER_TEMP/private-sdk"
           python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --sdk-host "$RUNNER_TEMP/private-sdk/dotnet" --sdk-version "$sdk_version" --framework "$compiler_framework" --output "$RUNNER_TEMP/acceptance/hot-reload"
           python3 tools/fsharp-watch/smoke.py --tool "$RUNNER_TEMP/watch-tool/fsharp-watch" --sdk-host "$RUNNER_TEMP/private-sdk/dotnet" --sdk-version "$sdk_version" --framework "$compiler_framework" --multi-project --output "$RUNNER_TEMP/acceptance/multi-project"

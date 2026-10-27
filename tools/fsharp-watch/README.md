@@ -40,7 +40,7 @@ A later source change or build failure can interrupt that restart.
 ## Package the tool
 
 Install the SDK checkout's pinned build SDK through its standard bootstrap command.
-Use the SDK fork branch `feature/fsharp-watch-global-tool` from `NatElkins/sdk`.
+Check out the SDK revision in `sdk-source.json` from `NatElkins/sdk`.
 Run the package script with that checkout path.
 
 ```sh
@@ -49,6 +49,7 @@ dotnet tool install --global fsharp-watch --prerelease --add-source tools/fsharp
 ```
 
 The script builds the watch engine before package creation.
+It rejects an SDK checkout that differs from `sdk-source.json`.
 It verifies every packaged payload file against its provenance hash.
 It rejects packages that contain an F# compiler, compiler service, or compiler build task.
 The F# launcher retains its ordinary FSharp.Core runtime dependency.
@@ -83,3 +84,35 @@ python3 tools/fsharp-watch/smoke.py --expect-restart --output /tmp/fsharp-watch-
 
 The acceptance driver also verifies SDK selection, compiler replacement, and hot reload opt-outs.
 Private SDK fixtures provide positive cases until an official SDK contains the compiler changes.
+
+## Source updates and releases
+
+The weekly SDK workflow proposes a merge from `dotnet/sdk` main into the maintained engine branch.
+Merge conflicts stop the workflow and require a source fix.
+The weekly package workflow proposes immutable engine and compiler fixture revisions.
+It rejects rewritten source history and preserves existing update branches.
+Both workflows require their definitions on the repository default branch before schedules become active.
+
+Package CI builds one archive on Linux and installs that archive on Linux, macOS, and Windows.
+Linux and macOS run stock-SDK fallback and private-compiler hot reload scenarios.
+The fixture copies compiler files into a separate SDK installation and retains the stock build targets.
+It never replaces the user's compiler.
+
+After a change reaches `main`, the release workflow verifies the package and publishes that same archive.
+Each workflow run uses a unique preview version.
+The `nuget` environment limits publication to the release job.
+NuGet trusted publishing exchanges a GitHub identity token for a short-lived push credential.
+The workflow stores no API key.
+
+## Configure NuGet publication
+
+Create a trusted publisher policy for the Nelknet package owner.
+Set the repository owner to `NatElkins`.
+Set the repository to `hot_reload_poc`.
+Set the workflow filename to `fsharp-watch-release.yml`.
+Set the environment to `nuget`.
+Limit the package pattern to `fsharp-watch`.
+Select the scope for new packages and new versions.
+Set the repository variable `NUGET_USER` to the policy creator's NuGet profile.
+
+See the [NuGet trusted publishing documentation](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) for account requirements and activation limits.

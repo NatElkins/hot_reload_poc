@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
@@ -31,10 +32,22 @@ def copy_payload(source, destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, required=True)
+    parser.add_argument("--version", help="Override the preview version for a CI release.")
     args = parser.parse_args()
     args.sdk = args.sdk.resolve()
-    revisions = {"sdkCommit": git_revision(args.sdk)}
     root = Path(__file__).resolve().parent
+    source = json.loads((root / "sdk-source.json").read_text())
+    revision = git_revision(args.sdk)
+    if revision != source["commit"]:
+        parser.error(f"SDK checkout {revision} differs from the pinned source {source['commit']}.")
+    subprocess.run(["git", "-C", str(args.sdk), "merge-base", "--is-ancestor",
+                    source["upstreamCommit"], revision], check=True)
+    if args.version and not re.fullmatch(r"0\.2\.0-preview\.[0-9]+\.[0-9]+", args.version):
+        parser.error("The version must use 0.2.0-preview.<date>.<sequence>.")
+    revisions = {"sdkCommit": revision, "sdkRepository": source["repository"],
+                 "upstreamCommit": source["upstreamCommit"],
+                 "toolCommit": subprocess.check_output(
+                     ["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()}
     sdk_arguments = ["build", "src/Dotnet.Watch/dotnet-watch/dotnet-watch.csproj", "-c", "Release",
                      "-p:SdkTargetFramework=net10.0", "-v", "minimal"]
     subprocess.run([str(args.sdk / ".dotnet/dotnet"), *sdk_arguments], cwd=args.sdk, check=True)
@@ -69,8 +82,10 @@ def main():
     project = root / "FSharpWatch.fsproj"
     # Remove obsolete copied output before the tool pack target scans the output directory.
     subprocess.run(["dotnet", "clean", str(project), "-c", "Release", "-v", "quiet"], check=True)
-    subprocess.run(["dotnet", "pack", str(project), "-c", "Release", "-o", str(root / "artifacts")], check=True)
-    version = ET.parse(project).findtext("PropertyGroup/Version")
+    version_arguments = [f"-p:Version={args.version}"] if args.version else []
+    subprocess.run(["dotnet", "pack", str(project), "-c", "Release", "-o", str(root / "artifacts"),
+                    *version_arguments], check=True)
+    version = args.version or ET.parse(project).findtext("PropertyGroup/Version")
     package = root / "artifacts" / f"fsharp-watch.{version}.nupkg"
     prefix = "tools/net10.0/any/payload/"
     with zipfile.ZipFile(package) as archive:

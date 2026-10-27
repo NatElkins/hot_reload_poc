@@ -1,0 +1,12 @@
+{
+  "repository": "NatElkins/sdk",
+  "branch": "feature/fsharp-watch-global-tool",
+  "commit": "61a2b4d47c3a3f0cd7e119174076c6a65ef32599",
+  "upstreamRepository": "dotnet/sdk",
+  "upstreamCommit": "082c56168c1654f1311bbc3cbc4b0548b45ed529",
+  "compilerFixture": {
+    "repository": "NatElkins/fsharp",
+    "branch": "hot-reload-v2",
+    "commit": "74ec9f2c32adaa78a1cf1876fda67d2eed69b061"
+  }
+}

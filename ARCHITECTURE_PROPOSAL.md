@@ -1,5 +1,17 @@
 # F# Hot Reload Architecture Proposal
 
+## October 2026 maintenance
+
+The compiler PRs and standalone watch engine require fresh integration with current upstream source.
+The tool remains `fsharp-watch`, and the selected SDK supplies the compiler and compiler service.
+The package pins an immutable SDK engine revision and records its incorporated upstream revision.
+Separate sync workflows propose SDK merges and package source updates.
+The release workflow publishes the same archive that CI installs and verifies.
+Nelknet is the intended NuGet package owner.
+Trusted publishing replaces a stored NuGet API key.
+Private compiler fixtures remain necessary until an official SDK supplies the hot reload session API.
+Implementation and remote CI verification are in progress.
+
 ## 1. Context and Goals
 
 - **Objective**: deliver parity-level Edit and Continue (EnC) and Hot Reload for F# comparable to the C# experience implemented in Roslyn (`roslyn/src/Features/Core/Portable/EditAndContinue`).

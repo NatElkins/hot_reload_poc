@@ -12,6 +12,9 @@ The release workflow publishes the same archive that CI installs and verifies on
 Nelknet owns the configured NuGet trusted publisher policy.
 The release job exchanges its GitHub identity for a short-lived push credential.
 The repository stores no NuGet API key.
+The first public preview is `0.2.0-preview.20261027.405350781321`.
+Its public archive matches the verified release artifact, apart from the NuGet signature.
+Installation from NuGet passed, and all 238 installed payload hashes match.
 The policy permits only `fsharp-watch` publication from the `nuget` environment.
 That environment accepts only `main`.
 
@@ -23,6 +26,14 @@ Compiler review fixed cross-project capture leakage, omitted runtime-async lower
 The compiler verifier passed all 11 steps, including complete metadata inspection and runtime updates.
 Release EmittedIL passed 1,660 tests with three existing skips.
 Maintainer review and exact-head hosted CI remain separate requirements for upstream merges.
+
+The complete feedback audit includes resolved and outdated review threads.
+It found remaining browser diagnostic delivery, help-link, driver-boundary, environment-name, and translation gaps.
+The corrected watch engine passes both host builds and 62 focused tests locally and in hosted CI.
+The final compiler feedback checks passed, including the complete metadata and runtime gate.
+
+The sections below retain historical design notes.
+The current compiler design is in the [architecture reference](https://github.com/NatElkins/fsharp/blob/hot-reload-v2/docs/hot-reload-architecture.md).
 
 ## 1. Context and Goals
 

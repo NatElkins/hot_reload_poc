@@ -9,29 +9,43 @@ The standalone tool uses immutable source pins, weekly update PRs, installed-pac
 Local verification passed:
 
 - Each compiler slice passed its build, applicable HotReload suites, surface-area test, and formatting check.
-- The umbrella passed all 11 verifier steps, 593 service tests, 255 component tests, and 29 strict metadata tests.
+- The umbrella passed all 11 verifier steps, 595 service tests, 255 component tests, and 29 strict metadata tests.
 - Release EmittedIL passed 1,660 tests, with zero failures and three existing skips.
-- The SDK engine passed 60 focused tests locally and in hosted CI.
+- The corrected SDK engine passed 62 focused tests locally and in hosted CI.
 - Package support scripts passed 16 unit tests.
 - Installed package checks passed stock-SDK fallback, private-compiler hot reload, multi-project edits, SDK selection, and opt-outs.
 
-Package CI verifies one archive on Linux, macOS, and Windows.
-The final run uses compiler fixture `413be4377c` and SDK engine `8eac7414d8`.
-The release workflow repeats those checks on `main` before it publishes that archive under Nelknet.
-The NuGet policy and GitHub environment are configured.
-The SDK sync schedule is active on its default branch.
-The package sync schedule activates when this PR reaches `main`.
+The first release passed package verification on Linux, macOS, and Windows.
+NuGet published `0.2.0-preview.20261027.405350781321` under Nelknet.
+Public installation passed, and all 238 installed payload hashes match.
+The NuGet policy uses the GitHub release identity and stores no API key.
+Both weekly source-update schedules are active and passed their first invocations.
 
 Follow-up actions:
 
-- Verify terminal hosted results against each final compiler head.
-- Merge the tool PR after its verification gate passes.
-- Verify the first NuGet publication and installation from the public feed.
+- Complete the exhaustive feedback audit, including resolved and historical threads.
+- Finish the compiler feedback corrections and verify their final source heads.
+- Publish the corrected browser diagnostics and help link through the same release gate.
+- Update the global tool after the corrected preview passes public installation checks.
 - Complete upstream maintainer review before the compiler PRs merge.
 
-This plan converts ARCHITECTURE_PROPOSAL.md into concrete milestones and tasks. Each task is scoped so that a single LLM-focused iteration can complete it while keeping the repository in a buildable, backwards-compatible state. After every task, run the full build (`dotnet build FSharp.sln` or `build.cmd`) and applicable test suites. Complete outstanding work in earlier milestones before tackling later items—e.g., finish the Task 2.x synthesized-name/metadata plumbing prior to expanding tooling scenarios in Milestone 3.
+This plan records the compiler and tool milestones.
+Historical entries retain the commands that applied at their recorded dates.
+The compiler uses `FSharp.slnx` and Microsoft.Testing.Platform.
 
-- Testing guidance: the full component suite is time-consuming (10+ minutes). For day-to-day iteration run `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload` and reserve the full suite for validation runs.
+From the compiler checkout, run the current build and hot reload verifier.
+
+```sh
+./.dotnet/dotnet build FSharp.slnx -c Debug
+./tests/scripts/hot-reload-verify.sh
+```
+
+Use Release configuration for the EmittedIL suite.
+If the isolated installation lacks the older target runtimes, run the verifier with explicit roll-forward.
+
+```sh
+DOTNET_ROLL_FORWARD=Major DOTNET_ROLL_FORWARD_TO_PRERELEASE=1 ./tests/scripts/hot-reload-verify.sh
+```
 
 ## Milestone 1 – Baseline Capture & Semantic Diff Infrastructure
 

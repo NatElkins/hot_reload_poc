@@ -15,19 +15,25 @@ Local verification passed:
 - Package support scripts passed 16 unit tests.
 - Installed package checks passed stock-SDK fallback, private-compiler hot reload, multi-project edits, SDK selection, and opt-outs.
 
-The first release passed package verification on Linux, macOS, and Windows.
-NuGet published `0.2.0-preview.20261027.405350781321` under Nelknet.
+Each final compiler PR head passed all 55 GitHub checks and all 51 Azure jobs.
+The final scan found no new or edited review feedback.
+
+The corrected release passed package verification on Linux, macOS, and Windows.
+NuGet published `0.2.0-preview.20261027.405527690991` under Nelknet.
 Public installation passed, and all 238 installed payload hashes match.
+The global tool now uses the corrected preview.
+Its stock SDK smoke passed source edits, compiler-error recovery, restart behavior, and process cleanup.
 The NuGet policy uses the GitHub release identity and stores no API key.
 Both weekly source-update schedules are active and passed their first invocations.
 
-Follow-up actions:
+The exhaustive feedback audit includes resolved and historical threads.
+Every applicable request has a source correction or an explicit disposition with evidence.
+The compiler and SDK branches contain the final corrections.
+The public preview includes the corrected browser diagnostics and help link.
 
-- Complete the exhaustive feedback audit, including resolved and historical threads.
-- Finish the compiler feedback corrections and verify their final source heads.
-- Publish the corrected browser diagnostics and help link through the same release gate.
-- Update the global tool after the corrected preview passes public installation checks.
-- Complete upstream maintainer review before the compiler PRs merge.
+Upstream maintainer review remains necessary before the compiler PRs merge.
+PR #20025 retains its earlier changes-requested review until a maintainer completes re-review.
+Weekly source-update PRs require review and a merge before publication.
 
 This plan records the compiler and tool milestones.
 Historical entries retain the commands that applied at their recorded dates.

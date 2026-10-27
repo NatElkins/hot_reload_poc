@@ -12,7 +12,7 @@ The release workflow publishes the same archive that CI installs and verifies on
 Nelknet owns the configured NuGet trusted publisher policy.
 The release job exchanges its GitHub identity for a short-lived push credential.
 The repository stores no NuGet API key.
-The first public preview is `0.2.0-preview.20261027.405350781321`.
+The corrected public preview is `0.2.0-preview.20261027.405527690991`.
 Its public archive matches the verified release artifact, apart from the NuGet signature.
 Installation from NuGet passed, and all 238 installed payload hashes match.
 The policy permits only `fsharp-watch` publication from the `nuget` environment.
@@ -25,10 +25,12 @@ The package contains no replacement compiler or compiler service.
 Compiler review fixed cross-project capture leakage, omitted runtime-async lowering, and incorrect delta parameter metadata.
 The compiler verifier passed all 11 steps, including complete metadata inspection and runtime updates.
 Release EmittedIL passed 1,660 tests with three existing skips.
-Maintainer review and exact-head hosted CI remain separate requirements for upstream merges.
+Each final compiler PR head passed all 55 GitHub checks and all 51 Azure jobs.
+Upstream merges still require maintainer review.
 
 The complete feedback audit includes resolved and outdated review threads.
-It found remaining browser diagnostic delivery, help-link, driver-boundary, environment-name, and translation gaps.
+The feedback corrections cover browser diagnostics, the help link, driver isolation, shared environment names, and the requested translations.
+The emitter now separates definition matching, row construction, and sequence-point analysis behind typed boundaries.
 The corrected watch engine passes both host builds and 62 focused tests locally and in hosted CI.
 The final compiler feedback checks passed, including the complete metadata and runtime gate.
 

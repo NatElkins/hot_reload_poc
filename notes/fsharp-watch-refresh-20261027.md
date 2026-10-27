@@ -21,7 +21,10 @@ The package pins engine `b6f301717c` and compiler fixture `74df1854e3`.
 | [NatElkins/sdk#1](https://github.com/NatElkins/sdk/pull/1) | SDK prototype |
 | [NatElkins/sdk#2](https://github.com/NatElkins/sdk/pull/2) | Standalone watch engine |
 
+Each final compiler PR head passed all 55 GitHub checks and all 51 Azure jobs.
+The final feedback scan found no new or edited comments.
 The compiler PRs remain open for maintainer review.
+PR #20025 retains its earlier changes-requested review until maintainer re-review.
 The historical foundations fork PR remains a reference, because merged upstream PRs replace its design.
 The contributor-owned expression-evaluator prototype remains separate from the CLI release.
 
@@ -40,7 +43,7 @@ Independent review covered complete F# and C# metadata dumps and runtime applica
 
 The corrected watch engine passed 62 focused tests locally and in hosted Linux CI.
 The package support scripts passed 16 unit tests.
-The [final source gate](https://github.com/NatElkins/hot_reload_poc/actions/runs/40533012274) passed on Linux, macOS, and Windows.
+The [final source gate](https://github.com/NatElkins/hot_reload_poc/actions/runs/40550473558) passed on Linux, macOS, and Windows.
 Each platform verified stock-SDK fallback and private-compiler hot reload.
 Linux and macOS also verified multiple projects.
 Local checks verified SDK selection, compiler replacement, opt-outs, and process cleanup.
@@ -59,11 +62,13 @@ The compiler driver now uses its emission hook for module debug information.
 The expanded guard catches fully qualified references that previously escaped detection.
 The compiler shares environment names and Boolean parsing, restores the requested translations, and removes intermediate list allocations.
 The emitter separates definition matching, row construction, and sequence-point analysis behind typed boundaries.
-Independent review confirms unchanged emitted IL and metadata outside generation GUIDs.
+Both delta IL files match byte-for-byte.
+Their metadata differs only in the GUID heap.
 
 ## Release automation
 
-The [tool PR](https://github.com/NatElkins/hot_reload_poc/pull/1) merged into main.
+The [initial tool PR](https://github.com/NatElkins/hot_reload_poc/pull/1) merged into main.
+The [feedback corrections](https://github.com/NatElkins/hot_reload_poc/pull/2) also merged.
 Both weekly workflows are active and passed their first invocations.
 The SDK workflow proposes upstream merges into the maintained engine branch.
 The package workflow proposes immutable engine and compiler fixture revisions.
@@ -72,10 +77,14 @@ Conflicts require a source fix before an update can merge.
 The release workflow verifies one archive on all three platforms before publication.
 NuGet trusted publishing uses the release workflow identity and stores no API key.
 The `nuget` environment permits only main.
-The [first release run](https://github.com/NatElkins/hot_reload_poc/actions/runs/40535078132) passed.
-NuGet published `0.2.0-preview.20261027.405350781321` under Nelknet.
-The public archive matches the verified artifact, and public installation passed.
-A subsequent preview will include the additional feedback corrections.
+The [corrected release run](https://github.com/NatElkins/hot_reload_poc/actions/runs/40552769099) passed.
+Nelknet published [version `0.2.0-preview.20261027.405527690991`](https://www.nuget.org/packages/fsharp-watch/0.2.0-preview.20261027.405527690991).
+All 264 original archive entries match the verified artifact.
+NuGet adds one signature entry.
+Public installation passed, and all 238 installed payload hashes match.
+The global tool now uses this preview.
+Its stock SDK smoke passed source edits, compiler-error recovery, restart behavior, and process cleanup.
+Source-update PRs require review and a merge before publication.
 
 Official SDKs must distribute the compiler changes before the tool can provide F# hot reload with those SDKs.
 SDKs without compatible session APIs use rebuild and restart.

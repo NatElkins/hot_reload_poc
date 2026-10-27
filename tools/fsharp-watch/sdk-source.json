@@ -1,7 +1,7 @@
 {
   "repository": "NatElkins/sdk",
   "branch": "feature/fsharp-watch-global-tool",
-  "commit": "61a2b4d47c3a3f0cd7e119174076c6a65ef32599",
+  "commit": "87b524ac4eab2b663bdab98c3dd1464247108ba2",
   "upstreamRepository": "dotnet/sdk",
   "upstreamCommit": "082c56168c1654f1311bbc3cbc4b0548b45ed529",
   "compilerFixture": {

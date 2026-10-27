@@ -7,7 +7,8 @@ import shutil
 import subprocess
 
 COMPILER_FILES = {"fsc.dll", "fsc.deps.json", "fsc.runtimeconfig.json",
-                  "FSharp.Compiler.Service.dll", "FSharp.Core.dll"}
+                  "FSharp.Compiler.Service.dll", "FSharp.Core.dll", "FSharp.Build.dll",
+                  "Microsoft.FSharp.Targets", "Microsoft.FSharp.Core.NetSdk.props"}
 
 
 def create_fixture(sdk_root, version, compiler, destination):
@@ -30,10 +31,10 @@ def create_fixture(sdk_root, version, compiler, destination):
             shutil.copy2(sdk_root / name, destination / name)
     target_sdk = destination / "sdk" / version
     shutil.copytree(sdk_root / "sdk" / version, target_sdk)
-    # Retain SDK build targets and library packs. Only the compiler implementation changes.
-    for name in COMPILER_FILES:
-        source = compiler / name
-        shutil.copy2(source, target_sdk / "FSharp" / name)
+    # The build task and compiler must use the same FSharp.Core assembly identity.
+    # Retain stock library packs but replace the full compiler distribution together.
+    shutil.copytree(compiler, target_sdk / "FSharp", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("*.runtimeconfig.dev.json", "*.pdb", "*.xml"))
     (destination / ".fsharp-watch-private-sdk").write_text(json.dumps({
         "purpose": "Private future-SDK fixture. This is not an official SDK distribution.",
         "compilerOutput": str(compiler), "sdkVersion": version,

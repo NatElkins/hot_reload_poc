@@ -95,7 +95,7 @@ Both workflows require their definitions on the repository default branch before
 
 Package CI builds one archive on Linux and installs that archive on Linux, macOS, and Windows.
 Linux and macOS run stock-SDK fallback and private-compiler hot reload scenarios.
-The fixture copies compiler files into a separate SDK installation and retains the stock build targets.
+The fixture copies the compiler and matching build task into a separate SDK installation.
 It never replaces the user's compiler.
 
 After a change reaches `main`, the release workflow verifies the package and publishes that same archive.
@@ -113,6 +113,6 @@ Set the workflow filename to `fsharp-watch-release.yml`.
 Set the environment to `nuget`.
 Limit the package pattern to `fsharp-watch`.
 Select the scope for new packages and new versions.
-Set the repository variable `NUGET_USER` to the policy creator's NuGet profile.
+Set the repository variable `NUGET_USER` to `Nelkins`, the policy creator's NuGet profile.
 
 See the [NuGet trusted publishing documentation](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) for account requirements and activation limits.

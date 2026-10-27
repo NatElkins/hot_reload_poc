@@ -18,6 +18,8 @@ class FixtureTests(unittest.TestCase):
         (self.sdk / "dotnet").write_text("host")
         (self.fsharp / "fsc.dll").write_text("stock compiler")
         (self.fsharp / "Microsoft.FSharp.Core.NetSdk.props").write_text("stock targets")
+        (self.fsharp / "library-packs").mkdir()
+        (self.fsharp / "library-packs/core.nupkg").write_text("stock package")
         for name in COMPILER_FILES:
             (self.compiler / name).write_text("private compiler")
 
@@ -27,7 +29,8 @@ class FixtureTests(unittest.TestCase):
         (target / "fsc.dll").write_text("replacement")
         self.assertEqual((self.fsharp / "fsc.dll").read_text(), "stock compiler")
         self.assertEqual((self.compiler / "fsc.dll").read_text(), "private compiler")
-        self.assertEqual((target / "Microsoft.FSharp.Core.NetSdk.props").read_text(), "stock targets")
+        self.assertEqual((target / "Microsoft.FSharp.Core.NetSdk.props").read_text(), "private compiler")
+        self.assertEqual((target / "library-packs/core.nupkg").read_text(), "stock package")
 
     def test_incomplete_compiler_leaves_no_destination(self):
         (self.compiler / "fsc.runtimeconfig.json").unlink()

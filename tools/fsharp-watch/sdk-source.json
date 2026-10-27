@@ -7,6 +7,6 @@
   "compilerFixture": {
     "repository": "NatElkins/fsharp",
     "branch": "hot-reload-v2",
-    "commit": "74ec9f2c32adaa78a1cf1876fda67d2eed69b061"
+    "commit": "9e6f402154d2f1c5c97fe890ec311e0cd13c967d"
   }
 }

@@ -57,9 +57,15 @@ Install the SDK checkout's pinned build SDK through its standard bootstrap comma
 Check out the SDK revision in `sdk-source.json` from `NatElkins/sdk`.
 Run the package script with that checkout path.
 
+Choose a distinct version for each local build.
+Install that exact version into a separate tool directory.
+
 ```sh
-python3 tools/fsharp-watch/pack.py --sdk /path/to/sdk
-dotnet tool install --global fsharp-watch --prerelease --add-source tools/fsharp-watch/artifacts
+watch_version="0.2.0-preview.$(date -u +%Y%m%d).$(date -u +%s)"
+watch_tool_path="/tmp/fsharp-watch-$watch_version"
+python3 tools/fsharp-watch/pack.py --sdk /path/to/sdk --version "$watch_version"
+dotnet tool install fsharp-watch --tool-path "$watch_tool_path" --version "$watch_version" --add-source tools/fsharp-watch/artifacts
+"$watch_tool_path/fsharp-watch" --tool-info
 ```
 
 The script builds the watch engine before package creation.
@@ -77,6 +83,15 @@ Its child process imports `FSharpWatch.targets` through `CustomAfterMicrosoftCom
 That target adds compiler flags only after a successful compatibility probe.
 An existing environment value for `CustomAfterMicrosoftCommonTargets` remains part of the import chain.
 The package retains the upstream watch arguments.
+
+The deferred upstream provider design limits its first version to F# project graphs.
+This standalone preview retains the prototype's project discovery behavior.
+Mixed-language updates within one process remain unverified.
+The private-compiler acceptance suite covers single-project and multi-project F# applications.
+
+The deferred provider design also requires a typed adapter without reflection or experimental watch properties.
+This preview uses the existing compatibility bridge to support an external release before that SDK adapter exists.
+See [the upstream design discussion](https://github.com/dotnet/sdk/issues/55464) for those integration requirements.
 
 ## Verify a local installation
 
